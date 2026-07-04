@@ -1,0 +1,37 @@
+workflows:
+  ios-release-unsigned:
+    name: iOS release (chưa ký — dùng cho Sideloadly)
+    instance_type: mac_mini_m2
+    max_build_duration: 45
+    environment:
+      flutter: 3.41.9
+      xcode: latest
+    scripts:
+      - name: Cài dependencies
+        script: flutter pub get
+      - name: Build iOS release (không ký)
+        script: flutter build ios --release --no-codesign
+      - name: Đóng gói .ipa từ Runner.app
+        script: |
+          cd build/ios/iphoneos
+          mkdir Payload
+          cp -r Runner.app Payload/
+          zip -r Doka.ipa Payload
+    artifacts:
+      - build/ios/iphoneos/Doka.ipa
+
+  android-release:
+    name: Android release APK
+    instance_type: mac_mini_m2
+    max_build_duration: 45
+    environment:
+      flutter: 3.41.9
+    scripts:
+      - name: Cài dependencies
+        script: flutter pub get
+      - name: Chạy tests
+        script: flutter test
+      - name: Build APK release
+        script: flutter build apk --release
+    artifacts:
+      - build/app/outputs/flutter-apk/app-release.apk
