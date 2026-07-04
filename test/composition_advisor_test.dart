@@ -40,6 +40,33 @@ void main() {
       expect(advice.isAligned, isTrue);
     });
 
+    test('aimPoint: đưa + về nốt tròn thì chủ thể vào đúng target', () {
+      // Chủ thể ở (0.25, 0.25), đích (1/3, 1/3): cảnh phải trôi (−1/12, −1/12)
+      // → điểm ngắm nằm tại tâm trừ đúng đoạn đó.
+      final advice = adviseComposition(
+        Rect.fromCenter(
+          center: const Offset(0.25, 0.25),
+          width: 0.2,
+          height: 0.2,
+        ),
+      );
+      expect(advice.aimPoint.dx, closeTo(0.5 + 0.25 - 1 / 3, 1e-9));
+      expect(advice.aimPoint.dy, closeTo(0.5 + 0.25 - 1 / 3, 1e-9));
+    });
+
+    test('aimPoint trùng tâm khi chủ thể đã ở đúng đích', () {
+      final advice = adviseComposition(
+        Rect.fromCenter(
+          center: const Offset(1 / 3, 1 / 3),
+          width: 0.1,
+          height: 0.1,
+        ),
+      );
+      expect(advice.aimPoint.dx, closeTo(0.5, 1e-9));
+      expect(advice.aimPoint.dy, closeTo(0.5, 1e-9));
+      expect(advice.isAligned, isTrue);
+    });
+
     test('cờ isLocked được giữ nguyên', () {
       final advice = adviseComposition(
         Rect.fromCenter(

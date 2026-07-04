@@ -1,11 +1,10 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
 import 'composition_advisor.dart';
 
-/// Vẽ hướng dẫn bố cục lên viewfinder: khung chủ thể, điểm đích,
-/// mũi tên di chuyển; chuyển xanh khi đã vào bố cục.
+/// Dẫn hướng bố cục kiểu ngắm: một nốt tròn đánh dấu điểm cần ngắm và một
+/// dấu + cố định giữa màn hình. Di máy cho dấu + trùng nốt tròn là chủ thể
+/// vào đúng điểm bố cục đẹp — mọi thứ chuyển xanh khi trùng.
 class CompositionOverlay extends StatelessWidget {
   const CompositionOverlay({super.key, required this.advice});
 
@@ -30,83 +29,59 @@ class _CompositionPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final a = advice;
+    final aligned = a?.isAligned ?? false;
+    final color = aligned
+        ? Colors.greenAccent
+        : (a?.isLocked ?? false ? Colors.amber : Colors.white);
+
+    // Dấu + cố định giữa màn hình (luôn hiện khi bật AI bố cục).
+    final center = Offset(size.width / 2, size.height / 2);
+    final crossPaint = Paint()
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round
+      ..color = aligned ? Colors.greenAccent : Colors.white.withValues(alpha: 0.9);
+    const arm = 11.0;
+    canvas.drawLine(
+        center - const Offset(arm, 0), center + const Offset(arm, 0), crossPaint);
+    canvas.drawLine(
+        center - const Offset(0, arm), center + const Offset(0, arm), crossPaint);
+
     if (a == null) return;
 
-    final color = a.isAligned
-        ? Colors.greenAccent
-        : (a.isLocked ? Colors.amber : Colors.white70);
-
-    // Khung chủ thể.
-    final rect = Rect.fromLTRB(
-      a.subjectRect.left * size.width,
-      a.subjectRect.top * size.height,
-      a.subjectRect.right * size.width,
-      a.subjectRect.bottom * size.height,
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(rect, const Radius.circular(10)),
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5
-        ..color = color.withValues(alpha: 0.85),
+    // Nốt tròn tại điểm ngắm; nếu ra ngoài khung thì ghim vào mép để người
+    // dùng vẫn thấy hướng cần di máy.
+    final aim = Offset(
+      (a.aimPoint.dx.clamp(0.04, 0.96)) * size.width,
+      (a.aimPoint.dy.clamp(0.04, 0.96)) * size.height,
     );
 
-    // Điểm đích.
-    final target = Offset(a.target.dx * size.width, a.target.dy * size.height);
-    canvas.drawCircle(
-      target,
-      a.isAligned ? 10 : 7,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2
-        ..color = color,
-    );
-
-    if (a.isAligned) {
-      canvas.drawCircle(target, 3.5, Paint()..color = color);
+    if (aligned) {
+      // Trùng đích: vòng xác nhận quanh dấu +.
+      canvas.drawCircle(
+        center,
+        18,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.5
+          ..color = color,
+      );
       return;
     }
 
-    // Mũi tên từ tâm chủ thể về điểm đích.
-    final from = Offset(
-      a.subjectCenter.dx * size.width,
-      a.subjectCenter.dy * size.height,
+    // Nốt tròn: lõi đặc + viền tối để nổi trên mọi nền.
+    canvas.drawCircle(
+      aim,
+      9,
+      Paint()..color = Colors.black.withValues(alpha: 0.35),
     );
-    final direction = target - from;
-    if (direction.distance < 1) return;
-    final unit = direction / direction.distance;
-    final start = from + unit * 14;
-    final end = target - unit * 14;
-    if ((end - start).distance < 8) return;
-
-    final line = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
-      ..strokeCap = StrokeCap.round
-      ..color = color;
-    canvas.drawLine(start, end, line);
-
-    // Đầu mũi tên.
-    final angle = math.atan2(unit.dy, unit.dx);
-    const headLength = 9.0;
-    const headAngle = 2.6;
-    canvas.drawLine(
-      end,
-      end +
-          Offset(
-            headLength * math.cos(angle + headAngle),
-            headLength * math.sin(angle + headAngle),
-          ),
-      line,
-    );
-    canvas.drawLine(
-      end,
-      end +
-          Offset(
-            headLength * math.cos(angle - headAngle),
-            headLength * math.sin(angle - headAngle),
-          ),
-      line,
+    canvas.drawCircle(aim, 7, Paint()..color = color);
+    canvas.drawCircle(
+      aim,
+      13,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5
+        ..color = color.withValues(alpha: 0.6),
     );
   }
 

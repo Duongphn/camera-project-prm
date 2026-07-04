@@ -24,6 +24,7 @@ class CompositionAdvice {
     required this.subjectRect,
     required this.subjectCenter,
     required this.target,
+    required this.aimPoint,
     required this.isAligned,
     required this.isLocked,
   });
@@ -31,6 +32,11 @@ class CompositionAdvice {
   final Rect subjectRect;
   final Offset subjectCenter;
   final Offset target;
+
+  /// Điểm ngắm: vị trí phải đưa dấu + giữa màn hình tới. Khi aimPoint trùng
+  /// tâm màn hình thì chủ thể nằm đúng [target] (điểm bố cục đẹp).
+  final Offset aimPoint;
+
   final bool isAligned;
 
   /// Người dùng đã long-press khoá chủ thể này.
@@ -62,10 +68,18 @@ CompositionAdvice adviseComposition(
     }
   }
 
+  // Cần dời khung ngắm một đoạn (target - center) để chủ thể vào target;
+  // điểm cảnh đang ở tâm sẽ trôi ngược lại đúng đoạn đó → điểm ngắm là:
+  final aimPoint = Offset(
+    0.5 + center.dx - target.dx,
+    0.5 + center.dy - target.dy,
+  );
+
   return CompositionAdvice(
     subjectRect: subjectRect,
     subjectCenter: center,
     target: target,
+    aimPoint: aimPoint,
     isAligned: (center - target).distance <= alignThreshold,
     isLocked: isLocked,
   );
