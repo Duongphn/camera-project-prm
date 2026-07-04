@@ -44,9 +44,13 @@ class CompositionAdvice {
 }
 
 /// Tính lời khuyên bố cục cho chủ thể [subjectRect] (0..1 viewfinder).
+///
+/// [fixedTarget]: điểm đích đã chốt từ lần phân tích đầu — truyền vào để
+/// đích không bị tính lại mỗi frame (chế độ "phân tích 1 lần").
 CompositionAdvice adviseComposition(
   Rect subjectRect, {
   bool isLocked = false,
+  Offset? fixedTarget,
   double alignThreshold = kAlignThreshold,
   double largeSubjectArea = kLargeSubjectArea,
 }) {
@@ -54,7 +58,9 @@ CompositionAdvice adviseComposition(
   final area = subjectRect.width * subjectRect.height;
 
   Offset target;
-  if (area >= largeSubjectArea) {
+  if (fixedTarget != null) {
+    target = fixedTarget;
+  } else if (area >= largeSubjectArea) {
     target = const Offset(0.5, 0.5);
   } else {
     target = thirdsPoints.first;

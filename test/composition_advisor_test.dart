@@ -67,6 +67,32 @@ void main() {
       expect(advice.isAligned, isTrue);
     });
 
+    test('fixedTarget: đích giữ nguyên dù chủ thể ở gần điểm thirds khác', () {
+      // Chủ thể gần điểm thirds phải-dưới, nhưng đích đã chốt là trái-trên.
+      final advice = adviseComposition(
+        Rect.fromCenter(
+          center: const Offset(0.6, 0.6),
+          width: 0.1,
+          height: 0.1,
+        ),
+        fixedTarget: const Offset(1 / 3, 1 / 3),
+      );
+      expect(advice.target, const Offset(1 / 3, 1 / 3));
+      expect(advice.isAligned, isFalse);
+    });
+
+    test('fixedTarget: aligned tính theo đích đã chốt', () {
+      final advice = adviseComposition(
+        Rect.fromCenter(
+          center: const Offset(1 / 3 + 0.02, 1 / 3),
+          width: 0.1,
+          height: 0.1,
+        ),
+        fixedTarget: const Offset(1 / 3, 1 / 3),
+      );
+      expect(advice.isAligned, isTrue);
+    });
+
     test('cờ isLocked được giữ nguyên', () {
       final advice = adviseComposition(
         Rect.fromCenter(

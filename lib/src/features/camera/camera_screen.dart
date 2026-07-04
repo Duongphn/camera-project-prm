@@ -20,6 +20,10 @@ import 'widgets/filter_carousel.dart';
 import 'widgets/grid_overlay.dart';
 import 'widgets/level_indicator.dart';
 
+/// Trạng thái tính năng AI bố cục: tắt → đang phân tích (1 lần, người dùng
+/// giữ nguyên máy) → đang dẫn hướng (nốt tròn + dấu +).
+enum _CompositionPhase { off, analyzing, guiding }
+
 class CameraScreen extends ConsumerStatefulWidget {
   const CameraScreen({super.key});
 
@@ -40,10 +44,15 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
   double _beauty = 0;
   bool _showBeautySlider = false;
   bool _suggesting = false;
-  bool _compositionOn = false;
+  _CompositionPhase _compositionPhase = _CompositionPhase.off;
   CompositionAdvice? _advice;
   SubjectDetector? _subjectDetector;
   bool _wasAligned = false;
+  Offset? _fixedTarget;
+  int? _candidateId;
+  int _candidateFrames = 0;
+  bool _manualLock = false;
+  bool _lostNotified = false;
   String? _error;
 
   FilmPreset get _preset => filmPresets[_presetIndex];
@@ -117,7 +126,11 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
         _cameraIndex = index;
         _error = null;
       });
-      if (_compositionOn) {
+      if (_compositionPhase != _CompositionPhase.off) {
+        // Camera mới (flip/resume) → phân tích lại từ đầu.
+        _subjectDetector?.unlock();
+        _resetAnalysisState();
+        _compositionPhase = _CompositionPhase.analyzing;
         await _startCompositionStream();
       }
     } on CameraException catch (e) {
@@ -209,19 +222,29 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     }
   }
 
-  // ---- AI bố cục ----
+  // ---- AI bố cục: bấm ⊹ → phân tích 1 lần → dẫn hướng tới nốt tròn ----
+
+  void _resetAnalysisState() {
+    _fixedTarget = null;
+    _candidateId = null;
+    _candidateFrames = 0;
+    _manualLock = false;
+    _lostNotified = false;
+    _wasAligned = false;
+    _advice = null;
+  }
 
   Future<void> _toggleComposition() async {
-    if (_compositionOn) {
-      _compositionOn = false;
+    if (_compositionPhase != _CompositionPhase.off) {
+      _compositionPhase = _CompositionPhase.off;
       await _pauseCompositionStream();
       _subjectDetector?.unlock();
-      if (mounted) {
-        setState(() => _advice = null);
-      }
+      _resetAnalysisState();
+      if (mounted) setState(() {});
       return;
     }
-    _compositionOn = true;
+    _resetAnalysisState();
+    _compositionPhase = _CompositionPhase.analyzing;
     await _startCompositionStream();
     if (mounted) setState(() {});
   }
@@ -234,7 +257,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     try {
       await controller.startImageStream(_onFrame);
     } catch (e) {
-      _compositionOn = false;
+      _compositionPhase = _CompositionPhase.off;
       if (mounted) {
         setState(() => _advice = null);
         _showMessage('Không bật được AI bố cục: $e');
@@ -250,7 +273,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
   }
 
   Future<void> _resumeCompositionStream() async {
-    if (_compositionOn) {
+    if (_compositionPhase != _CompositionPhase.off) {
       await _startCompositionStream();
     }
   }
@@ -258,7 +281,11 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
   void _onFrame(CameraImage image) {
     final detector = _subjectDetector;
     final controller = _controller;
-    if (detector == null || controller == null || !_compositionOn) return;
+    if (detector == null ||
+        controller == null ||
+        _compositionPhase == _CompositionPhase.off) {
+      return;
+    }
     final camera = _cameras[_cameraIndex];
     detector
         .process(
@@ -267,33 +294,91 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       deviceOrientation: controller.value.deviceOrientation,
     )
         .then((result) {
-      if (!mounted || !_compositionOn || result.skipped) return;
-      final subject = result.subject;
-      if (subject == null) {
-        if (_advice != null) setState(() => _advice = null);
-        _wasAligned = false;
+      if (!mounted ||
+          _compositionPhase == _CompositionPhase.off ||
+          result.skipped) {
         return;
       }
-      final viewRect = mapImageRectToView(
-        rect: subject.rect,
-        imageSize: subject.imageSize,
-        viewAspect: _aspect.ratio,
-        mirrorX: camera.lensDirection == CameraLensDirection.front,
-      );
-      final advice =
-          adviseComposition(viewRect, isLocked: subject.isLocked);
-      if (advice.isAligned && !_wasAligned) {
-        HapticFeedback.lightImpact();
+      if (_compositionPhase == _CompositionPhase.analyzing) {
+        _handleAnalyzingFrame(result.subject, camera);
+      } else {
+        _handleGuidingFrame(result.subject, camera);
       }
-      _wasAligned = advice.isAligned;
-      setState(() => _advice = advice);
     });
   }
 
-  /// Long-press trên viewfinder: khoá/bỏ khoá chủ thể tại điểm bấm.
+  /// Pha phân tích: chờ chủ thể ổn định 3 frame liên tiếp rồi chốt
+  /// chủ thể + điểm đích MỘT LẦN, chuyển sang pha dẫn hướng.
+  void _handleAnalyzingFrame(
+      SubjectDetection? subject, CameraDescription camera) {
+    final id = subject?.trackingId;
+    if (subject == null || id == null) {
+      _candidateId = null;
+      _candidateFrames = 0;
+      return;
+    }
+    if (id == _candidateId) {
+      _candidateFrames++;
+    } else {
+      _candidateId = id;
+      _candidateFrames = 1;
+    }
+    if (_candidateFrames < 3) return;
+
+    _subjectDetector!.lockTo(id);
+    final viewRect = _subjectViewRect(subject, camera);
+    final advice = adviseComposition(viewRect);
+    _fixedTarget = advice.target;
+    _compositionPhase = _CompositionPhase.guiding;
+    _wasAligned = advice.isAligned;
+    setState(() => _advice = advice);
+    HapticFeedback.selectionClick();
+    _showMessage('Đã tìm thấy điểm chụp đẹp — di máy cho dấu + trùng nốt tròn.');
+  }
+
+  /// Pha dẫn hướng: chỉ bám theo chủ thể đã chốt, đích giữ nguyên.
+  void _handleGuidingFrame(
+      SubjectDetection? subject, CameraDescription camera) {
+    if (subject == null || !subject.isLocked) {
+      // Mất dấu chủ thể đã chốt.
+      if (_advice != null) setState(() => _advice = null);
+      _wasAligned = false;
+      if (!_lostNotified) {
+        _lostNotified = true;
+        _showMessage('Mất dấu chủ thể — bấm ⊹ để phân tích lại.');
+      }
+      return;
+    }
+    _lostNotified = false;
+    final viewRect = _subjectViewRect(subject, camera);
+    // Sau long-press đổi chủ thể, đích được chốt lại một lần cho chủ thể mới.
+    _fixedTarget ??= adviseComposition(viewRect).target;
+    final advice = adviseComposition(
+      viewRect,
+      isLocked: _manualLock,
+      fixedTarget: _fixedTarget,
+    );
+    if (advice.isAligned && !_wasAligned) {
+      HapticFeedback.lightImpact();
+    }
+    _wasAligned = advice.isAligned;
+    setState(() => _advice = advice);
+  }
+
+  Rect _subjectViewRect(SubjectDetection subject, CameraDescription camera) {
+    return mapImageRectToView(
+      rect: subject.rect,
+      imageSize: subject.imageSize,
+      viewAspect: _aspect.ratio,
+      mirrorX: camera.lensDirection == CameraLensDirection.front,
+    );
+  }
+
+  /// Long-press trên viewfinder: tự chọn chủ thể tại điểm bấm;
+  /// bấm vùng trống → phân tích lại từ đầu.
   void _onViewfinderLongPress(Offset localPosition, Size viewSize) {
     final detector = _subjectDetector;
-    if (!_compositionOn || detector == null) return;
+    if (_compositionPhase == _CompositionPhase.off || detector == null) return;
     if (detector.lastImageSize == Size.zero) return;
     final camera = _cameras[_cameraIndex];
     final imagePoint = mapViewPointToImage(
@@ -307,9 +392,18 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     );
     final locked = detector.lockAt(imagePoint);
     HapticFeedback.selectionClick();
-    _showMessage(locked
-        ? 'Đã khoá chủ thể — AI sẽ bám theo nó.'
-        : 'Đã bỏ khoá chủ thể.');
+    if (locked) {
+      _manualLock = true;
+      _fixedTarget = null; // chốt lại đích cho chủ thể mới ở frame kế tiếp
+      _lostNotified = false;
+      _compositionPhase = _CompositionPhase.guiding;
+      _showMessage('Đã khoá chủ thể bạn chọn — di máy cho dấu + trùng nốt tròn.');
+    } else {
+      _resetAnalysisState();
+      _compositionPhase = _CompositionPhase.analyzing;
+      setState(() {});
+      _showMessage('Đang phân tích lại — giữ nguyên máy.');
+    }
   }
 
   void _showMessage(String message) {
@@ -414,7 +508,9 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
             onPressed: _toggleComposition,
             icon: Icon(
               Icons.center_focus_strong,
-              color: _compositionOn ? Colors.amber : Colors.white,
+              color: _compositionPhase != _CompositionPhase.off
+                  ? Colors.amber
+                  : Colors.white,
             ),
           ),
           IconButton(
@@ -470,7 +566,43 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
             ),
             if (_showGrid) const GridOverlay(),
             const LevelIndicator(),
-            if (_compositionOn) CompositionOverlay(advice: _advice),
+            if (_compositionPhase != _CompositionPhase.off)
+              CompositionOverlay(advice: _advice),
+            if (_compositionPhase == _CompositionPhase.analyzing)
+              Positioned(
+                top: 14,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 13,
+                          height: 13,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        ),
+                        SizedBox(width: 9),
+                        Text(
+                          'Giữ nguyên máy — đang tìm điểm chụp đẹp…',
+                          style:
+                              TextStyle(color: Colors.white, fontSize: 12.5),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             if (_processing)
               Container(
                 color: Colors.black45,

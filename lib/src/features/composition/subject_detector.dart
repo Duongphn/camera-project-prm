@@ -129,6 +129,9 @@ class SubjectDetector {
     return false;
   }
 
+  /// Khoá thẳng theo tracking ID (dùng khi phân tích tự chốt chủ thể).
+  void lockTo(int id) => _lockedId = id;
+
   void unlock() => _lockedId = null;
 
   Size get lastImageSize => _lastImageSize;
