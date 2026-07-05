@@ -4,15 +4,16 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image/image.dart' as img;
 
 import '../../providers.dart';
+import '../analysis/scene_analysis.dart';
 import '../composition/composition_advisor.dart';
 import '../composition/composition_overlay.dart';
 import '../composition/subject_detector.dart';
 import '../filters/film_preset.dart';
 import '../filters/photo_processor.dart';
 import '../gallery/gallery_screen.dart';
-import '../suggestion/filter_suggester.dart';
 import 'capture_aspect.dart';
 import 'widgets/beauty_preview_filter.dart';
 import 'widgets/film_preview_filter.dart';
@@ -53,6 +54,10 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
   int _candidateFrames = 0;
   bool _manualLock = false;
   bool _lostNotified = false;
+  Offset? _cloudTarget;
+  bool _cloudResolved = true;
+  List<String> _cloudTips = const [];
+  int _compositionAnalyzeToken = 0;
   String? _error;
 
   FilmPreset get _preset => filmPresets[_presetIndex];
@@ -193,7 +198,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     }
   }
 
-  /// Chụp một frame, phân tích cảnh (ML Kit + độ sáng) và tự chọn filter.
+  /// Chụp một ảnh tĩnh, phân tích bằng Gemini (fallback ML Kit khi offline) và tự chọn filter.
   Future<void> _suggestFilter() async {
     final controller = _controller;
     if (controller == null ||
@@ -207,12 +212,23 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       await _pauseCompositionStream();
       final shot = await controller.takePicture();
       final bytes = await shot.readAsBytes();
-      final preset =
-          await FilterSuggester.suggest(filePath: shot.path, bytes: bytes);
-      final index = filmPresets.indexWhere((p) => p.id == preset.id);
+      SceneAnalysis analysis;
+      try {
+        analysis = await ref
+            .read(sceneAnalyzerProvider)
+            .analyze(jpegBytes: bytes, filePath: shot.path);
+      } catch (_) {
+        analysis = await ref
+            .read(offlineAnalyzerProvider)
+            .analyze(jpegBytes: bytes, filePath: shot.path);
+      }
+      final index = filmPresets.indexWhere((p) => p.id == analysis.presetId);
       if (mounted && index >= 0) {
         setState(() => _presetIndex = index);
-        _showMessage('Gợi ý filter: ${preset.name} ✨');
+        final preset = filmPresets[index];
+        final reason = analysis.reason;
+        final suffix = (analysis.fromCloud && reason != null) ? ' — $reason' : '';
+        _showMessage('Gợi ý filter: ${preset.name} ✨$suffix');
       }
     } catch (e) {
       if (mounted) _showMessage('Không gợi ý được filter: $e');
@@ -232,6 +248,58 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     _lostNotified = false;
     _wasAligned = false;
     _advice = null;
+    _cloudTarget = null;
+    _cloudResolved = true;
+    _cloudTips = const [];
+  }
+
+  /// Chụp 1 ảnh tĩnh, hỏi Gemini điểm bố cục đẹp nhất. Tạm dừng stream khi
+  /// chụp rồi bật lại. Lỗi/offline → giữ _cloudTarget null (fallback hình học).
+  Future<void> _runCloudCompositionAnalysis() async {
+    final controller = _controller;
+    final token = ++_compositionAnalyzeToken;
+    _cloudResolved = false;
+    _cloudTarget = null;
+    _cloudTips = const [];
+    if (controller == null || !controller.value.isInitialized) {
+      if (token == _compositionAnalyzeToken) _cloudResolved = true;
+      return;
+    }
+    try {
+      await _pauseCompositionStream();
+      final shot = await controller.takePicture();
+      final bytes = await shot.readAsBytes();
+      final analysis = await ref
+          .read(sceneAnalyzerProvider)
+          .analyze(jpegBytes: bytes, filePath: shot.path);
+      if (token != _compositionAnalyzeToken) return; // đã bị lần phân tích mới thay
+      final rawTarget = analysis.targetPoint;
+      if (rawTarget != null) {
+        final decoded = img.decodeImage(bytes);
+        if (decoded != null) {
+          final upright = img.bakeOrientation(decoded);
+          final camera = _cameras[_cameraIndex];
+          final mapped = mapImagePointToView(
+            point: rawTarget,
+            imageSize: Size(upright.width.toDouble(), upright.height.toDouble()),
+            viewAspect: _aspect.ratio,
+            mirrorX: camera.lensDirection == CameraLensDirection.front,
+          );
+          _cloudTarget = Offset(
+            mapped.dx.clamp(0.0, 1.0),
+            mapped.dy.clamp(0.0, 1.0),
+          );
+        }
+      }
+      _cloudTips = analysis.tips;
+    } catch (_) {
+      // giữ null → fallback hình học
+    } finally {
+      if (token == _compositionAnalyzeToken) {
+        _cloudResolved = true;
+        await _resumeCompositionStream();
+      }
+    }
   }
 
   Future<void> _toggleComposition() async {
@@ -245,7 +313,9 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     }
     _resetAnalysisState();
     _compositionPhase = _CompositionPhase.analyzing;
-    await _startCompositionStream();
+    if (mounted) setState(() {});
+    _showMessage('Đang phân tích khung hình — giữ nguyên máy…');
+    await _runCloudCompositionAnalysis();
     if (mounted) setState(() {});
   }
 
@@ -324,16 +394,20 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       _candidateFrames = 1;
     }
     if (_candidateFrames < 3) return;
+    if (!_cloudResolved) return; // chờ Gemini trả điểm bố cục
 
     _subjectDetector!.lockTo(id);
     final viewRect = _subjectViewRect(subject, camera);
-    final advice = adviseComposition(viewRect);
-    _fixedTarget = advice.target;
+    _fixedTarget = _cloudTarget ?? adviseComposition(viewRect).target;
+    final advice = adviseComposition(viewRect, fixedTarget: _fixedTarget);
     _compositionPhase = _CompositionPhase.guiding;
     _wasAligned = advice.isAligned;
     setState(() => _advice = advice);
     HapticFeedback.selectionClick();
-    _showMessage('Đã tìm thấy điểm chụp đẹp — di máy cho dấu + trùng nốt tròn.');
+    final tip = _cloudTips.isNotEmpty
+        ? _cloudTips.first
+        : 'di máy cho dấu + trùng nốt tròn.';
+    _showMessage('Đã tìm điểm chụp đẹp — $tip');
   }
 
   /// Pha dẫn hướng: chỉ bám theo chủ thể đã chốt, đích giữ nguyên.

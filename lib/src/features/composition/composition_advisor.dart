@@ -120,6 +120,29 @@ Rect mapImageRectToView({
   return Rect.fromLTRB(left, top, right, bottom);
 }
 
+/// Map một điểm chuẩn hoá (0..1 trên ảnh tĩnh upright) sang toạ độ 0..1 của
+/// viewfinder (đã center-crop theo [viewAspect]; [mirrorX]=true cho camera
+/// trước). Kết quả có thể ra ngoài [0,1] nếu điểm nằm trong vùng bị crop —
+/// người gọi tự kẹp.
+Offset mapImagePointToView({
+  required Offset point,
+  required Size imageSize,
+  required double viewAspect,
+  bool mirrorX = false,
+}) {
+  final visible = centeredCropRect(
+    imageSize.width.round(),
+    imageSize.height.round(),
+    viewAspect,
+  );
+  final px = point.dx * imageSize.width;
+  final py = point.dy * imageSize.height;
+  var vx = (px - visible.left) / visible.width;
+  final vy = (py - visible.top) / visible.height;
+  if (mirrorX) vx = 1 - vx;
+  return Offset(vx, vy);
+}
+
 /// Ngược của [mapImageRectToView] cho một điểm: từ toạ độ 0..1 viewfinder
 /// về toạ độ px trong ảnh upright. Dùng cho long-press chọn chủ thể.
 Offset mapViewPointToImage({
