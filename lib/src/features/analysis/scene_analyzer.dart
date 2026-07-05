@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../filters/film_preset.dart';
+import '../suggestion/filter_suggester.dart';
 import 'gemini_prompt.dart';
 import 'gemini_request.dart';
 import 'scene_analysis.dart';
@@ -101,5 +102,28 @@ class GeminiSceneAnalyzer implements SceneAnalyzer {
       validIds: [for (final p in presets) p.id],
       fromCloud: true,
     );
+  }
+}
+
+/// Map một preset đã chọn on-device thành SceneAnalysis (không có targetPoint).
+SceneAnalysis sceneFromPreset(FilmPreset preset) => SceneAnalysis(
+      presetId: preset.id,
+      reason: 'Ngoại tuyến: ${preset.name}',
+      fromCloud: false,
+    );
+
+/// Fallback on-device cho luồng filter (ML Kit label + độ sáng).
+/// Không trả targetPoint — bố cục offline dùng hình học ngay tại camera_screen.
+class OfflineSceneAnalyzer implements SceneAnalyzer {
+  const OfflineSceneAnalyzer();
+
+  @override
+  Future<SceneAnalysis> analyze({
+    required Uint8List jpegBytes,
+    required String filePath,
+  }) async {
+    final preset =
+        await FilterSuggester.suggest(filePath: filePath, bytes: jpegBytes);
+    return sceneFromPreset(preset);
   }
 }
