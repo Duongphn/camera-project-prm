@@ -24,6 +24,16 @@ void main() {
     expect(decoded.height, 240);
   });
 
+  test('ảnh portrait (chiều cao > chiều rộng) được downscale theo chiều cao', () {
+    final src = img.Image(width: 900, height: 1600);
+    final jpeg = Uint8List.fromList(img.encodeJpg(src));
+    final out = downscaleForVision(jpeg, maxEdge: 768);
+    final decoded = img.decodeImage(out)!;
+    expect(decoded.height, lessThanOrEqualTo(768));
+    expect(decoded.width, lessThanOrEqualTo(768));
+    expect(decoded.height, greaterThan(decoded.width)); // giữ tỉ lệ portrait
+  });
+
   test('request body có prompt, ảnh inline và schema', () {
     final body = buildGeminiRequestBody(
       base64Image: 'AAAA',
