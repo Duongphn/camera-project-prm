@@ -7,6 +7,8 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 45
     environment:
+      groups:
+        - gemini
       flutter: 3.41.9
       xcode: latest
     scripts:
@@ -28,6 +30,8 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 45
     environment:
+      groups:
+        - gemini
       flutter: 3.41.9
     scripts:
       - name: Cài dependencies
