@@ -6,13 +6,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../providers.dart';
+import '../analysis/scene_analysis.dart';
 import '../composition/composition_advisor.dart';
 import '../composition/composition_overlay.dart';
 import '../composition/subject_detector.dart';
 import '../filters/film_preset.dart';
 import '../filters/photo_processor.dart';
 import '../gallery/gallery_screen.dart';
-import '../suggestion/filter_suggester.dart';
 import 'capture_aspect.dart';
 import 'widgets/beauty_preview_filter.dart';
 import 'widgets/film_preview_filter.dart';
@@ -207,12 +207,23 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       await _pauseCompositionStream();
       final shot = await controller.takePicture();
       final bytes = await shot.readAsBytes();
-      final preset =
-          await FilterSuggester.suggest(filePath: shot.path, bytes: bytes);
-      final index = filmPresets.indexWhere((p) => p.id == preset.id);
+      SceneAnalysis analysis;
+      try {
+        analysis = await ref
+            .read(sceneAnalyzerProvider)
+            .analyze(jpegBytes: bytes, filePath: shot.path);
+      } catch (_) {
+        analysis = await ref
+            .read(offlineAnalyzerProvider)
+            .analyze(jpegBytes: bytes, filePath: shot.path);
+      }
+      final index = filmPresets.indexWhere((p) => p.id == analysis.presetId);
       if (mounted && index >= 0) {
         setState(() => _presetIndex = index);
-        _showMessage('Gợi ý filter: ${preset.name} ✨');
+        final preset = filmPresets[index];
+        final reason = analysis.reason;
+        final suffix = (analysis.fromCloud && reason != null) ? ' — $reason' : '';
+        _showMessage('Gợi ý filter: ${preset.name} ✨$suffix');
       }
     } catch (e) {
       if (mounted) _showMessage('Không gợi ý được filter: $e');
