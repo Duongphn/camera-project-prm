@@ -66,9 +66,23 @@ class GeminiSceneAnalyzer implements SceneAnalyzer {
       throw Exception('Gemini HTTP ${resp.statusCode}: ${resp.body}');
     }
 
-    final decoded = jsonDecode(resp.body) as Map<String, dynamic>;
-    final text = decoded['candidates'][0]['content']['parts'][0]['text']
-        as String;
+    // JSON luôn là UTF-8 (RFC 8259); ép giải mã thủ công để tránh resp.body
+    // suy ra sai charset (vd. Latin-1) và làm hỏng tiếng Việt.
+    final decoded =
+        jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+
+    // Kiểm tra hình dạng phản hồi trước khi truy cập sâu, để ném Exception
+    // (không phải Error) khi Gemini trả về thiếu/rỗng candidates (vd. bị
+    // chặn vì lý do an toàn).
+    final candidates = decoded['candidates'];
+    if (candidates is! List || candidates.isEmpty) {
+      throw Exception('Gemini không trả về kết quả (có thể ảnh bị chặn).');
+    }
+    final parts = candidates[0]?['content']?['parts'];
+    if (parts is! List || parts.isEmpty || parts[0]?['text'] is! String) {
+      throw Exception('Gemini trả về định dạng không hợp lệ.');
+    }
+    final text = parts[0]['text'] as String;
     final inner = jsonDecode(text) as Map<String, dynamic>;
     return parseGeminiJson(
       inner,
