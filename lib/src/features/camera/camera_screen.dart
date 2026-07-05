@@ -53,6 +53,9 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
   int _candidateFrames = 0;
   bool _manualLock = false;
   bool _lostNotified = false;
+  Offset? _cloudTarget;
+  bool _cloudResolved = true;
+  List<String> _cloudTips = const [];
   String? _error;
 
   FilmPreset get _preset => filmPresets[_presetIndex];
@@ -243,6 +246,37 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     _lostNotified = false;
     _wasAligned = false;
     _advice = null;
+    _cloudTarget = null;
+    _cloudResolved = true;
+    _cloudTips = const [];
+  }
+
+  /// Chụp 1 ảnh tĩnh, hỏi Gemini điểm bố cục đẹp nhất. Tạm dừng stream khi
+  /// chụp rồi bật lại. Lỗi/offline → giữ _cloudTarget null (fallback hình học).
+  Future<void> _runCloudCompositionAnalysis() async {
+    final controller = _controller;
+    _cloudResolved = false;
+    _cloudTarget = null;
+    _cloudTips = const [];
+    if (controller == null || !controller.value.isInitialized) {
+      _cloudResolved = true;
+      return;
+    }
+    try {
+      await _pauseCompositionStream();
+      final shot = await controller.takePicture();
+      final bytes = await shot.readAsBytes();
+      final analysis = await ref
+          .read(sceneAnalyzerProvider)
+          .analyze(jpegBytes: bytes, filePath: shot.path);
+      _cloudTarget = analysis.targetPoint;
+      _cloudTips = analysis.tips;
+    } catch (_) {
+      // Giữ null → dùng đích hình học.
+    } finally {
+      _cloudResolved = true;
+      await _resumeCompositionStream();
+    }
   }
 
   Future<void> _toggleComposition() async {
@@ -256,7 +290,9 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     }
     _resetAnalysisState();
     _compositionPhase = _CompositionPhase.analyzing;
-    await _startCompositionStream();
+    if (mounted) setState(() {});
+    _showMessage('Đang phân tích khung hình — giữ nguyên máy…');
+    await _runCloudCompositionAnalysis();
     if (mounted) setState(() {});
   }
 
@@ -335,16 +371,20 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       _candidateFrames = 1;
     }
     if (_candidateFrames < 3) return;
+    if (!_cloudResolved) return; // chờ Gemini trả điểm bố cục
 
     _subjectDetector!.lockTo(id);
     final viewRect = _subjectViewRect(subject, camera);
-    final advice = adviseComposition(viewRect);
-    _fixedTarget = advice.target;
+    _fixedTarget = _cloudTarget ?? adviseComposition(viewRect).target;
+    final advice = adviseComposition(viewRect, fixedTarget: _fixedTarget);
     _compositionPhase = _CompositionPhase.guiding;
     _wasAligned = advice.isAligned;
     setState(() => _advice = advice);
     HapticFeedback.selectionClick();
-    _showMessage('Đã tìm thấy điểm chụp đẹp — di máy cho dấu + trùng nốt tròn.');
+    final tip = _cloudTips.isNotEmpty
+        ? _cloudTips.first
+        : 'di máy cho dấu + trùng nốt tròn.';
+    _showMessage('Đã tìm điểm chụp đẹp — $tip');
   }
 
   /// Pha dẫn hướng: chỉ bám theo chủ thể đã chốt, đích giữ nguyên.
