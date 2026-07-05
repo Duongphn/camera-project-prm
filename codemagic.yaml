@@ -1,3 +1,6 @@
+# Cần khai báo biến bí mật GEMINI_API_KEY trong Codemagic UI
+# (App settings → Environment variables, tick Secure) để lệnh build đọc được.
+# Không mạng/không key → app tự dùng phân tích on-device (ML Kit).
 workflows:
   ios-release-unsigned:
     name: iOS release (chưa ký — dùng cho Sideloadly)
@@ -10,7 +13,7 @@ workflows:
       - name: Cài dependencies
         script: flutter pub get
       - name: Build iOS release (không ký)
-        script: flutter build ios --release --no-codesign
+        script: flutter build ios --release --no-codesign --dart-define=GEMINI_API_KEY=$GEMINI_API_KEY
       - name: Đóng gói .ipa từ Runner.app
         script: |
           cd build/ios/iphoneos
@@ -32,6 +35,6 @@ workflows:
       - name: Chạy tests
         script: flutter test
       - name: Build APK release
-        script: flutter build apk --release
+        script: flutter build apk --release --dart-define=GEMINI_API_KEY=$GEMINI_API_KEY
     artifacts:
       - build/app/outputs/flutter-apk/app-release.apk
