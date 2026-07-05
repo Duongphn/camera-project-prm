@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:doka_app/src/features/analysis/gemini_prompt.dart';
 import 'package:doka_app/src/features/filters/film_preset.dart';
 import 'package:flutter_test/flutter_test.dart';

@@ -146,6 +146,46 @@ void main() {
     });
   });
 
+  group('mapImagePointToView', () {
+    test('không crop → map tuyến tính (identity)', () {
+      final view = mapImagePointToView(
+        point: const Offset(0.5, 0.25),
+        imageSize: const Size(300, 400),
+        viewAspect: 3 / 4,
+      );
+      expect(view.dx, closeTo(0.5, 1e-9));
+      expect(view.dy, closeTo(0.25, 1e-9));
+    });
+
+    test('crop vuông từ ảnh 300x400 → trừ phần bị cắt', () {
+      final center = mapImagePointToView(
+        point: const Offset(0.5, 0.5),
+        imageSize: const Size(300, 400),
+        viewAspect: 1.0,
+      );
+      expect(center.dx, closeTo(0.5, 1e-9));
+      expect(center.dy, closeTo(0.5, 1e-9));
+
+      final topEdge = mapImagePointToView(
+        point: const Offset(0.5, 0.125),
+        imageSize: const Size(300, 400),
+        viewAspect: 1.0,
+      );
+      expect(topEdge.dy, closeTo(0.0, 1e-9));
+    });
+
+    test('mirrorX lật trục ngang (camera trước)', () {
+      final view = mapImagePointToView(
+        point: const Offset(0.25, 0.5),
+        imageSize: const Size(300, 400),
+        viewAspect: 3 / 4,
+        mirrorX: true,
+      );
+      expect(view.dx, closeTo(0.75, 1e-9));
+      expect(view.dy, closeTo(0.5, 1e-9));
+    });
+  });
+
   group('mapViewPointToImage', () {
     test('là nghịch đảo của mapImageRectToView (không mirror)', () {
       const imageSize = Size(480, 640);

@@ -4,6 +4,7 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image/image.dart' as img;
 
 import '../../providers.dart';
 import '../analysis/scene_analysis.dart';
@@ -56,6 +57,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
   Offset? _cloudTarget;
   bool _cloudResolved = true;
   List<String> _cloudTips = const [];
+  int _compositionAnalyzeToken = 0;
   String? _error;
 
   FilmPreset get _preset => filmPresets[_presetIndex];
@@ -196,7 +198,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     }
   }
 
-  /// Chụp một frame, phân tích cảnh (ML Kit + độ sáng) và tự chọn filter.
+  /// Chụp một ảnh tĩnh, phân tích bằng Gemini (fallback ML Kit khi offline) và tự chọn filter.
   Future<void> _suggestFilter() async {
     final controller = _controller;
     if (controller == null ||
@@ -255,11 +257,12 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
   /// chụp rồi bật lại. Lỗi/offline → giữ _cloudTarget null (fallback hình học).
   Future<void> _runCloudCompositionAnalysis() async {
     final controller = _controller;
+    final token = ++_compositionAnalyzeToken;
     _cloudResolved = false;
     _cloudTarget = null;
     _cloudTips = const [];
     if (controller == null || !controller.value.isInitialized) {
-      _cloudResolved = true;
+      if (token == _compositionAnalyzeToken) _cloudResolved = true;
       return;
     }
     try {
@@ -269,13 +272,33 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       final analysis = await ref
           .read(sceneAnalyzerProvider)
           .analyze(jpegBytes: bytes, filePath: shot.path);
-      _cloudTarget = analysis.targetPoint;
+      if (token != _compositionAnalyzeToken) return; // đã bị lần phân tích mới thay
+      final rawTarget = analysis.targetPoint;
+      if (rawTarget != null) {
+        final decoded = img.decodeImage(bytes);
+        if (decoded != null) {
+          final upright = img.bakeOrientation(decoded);
+          final camera = _cameras[_cameraIndex];
+          final mapped = mapImagePointToView(
+            point: rawTarget,
+            imageSize: Size(upright.width.toDouble(), upright.height.toDouble()),
+            viewAspect: _aspect.ratio,
+            mirrorX: camera.lensDirection == CameraLensDirection.front,
+          );
+          _cloudTarget = Offset(
+            mapped.dx.clamp(0.0, 1.0),
+            mapped.dy.clamp(0.0, 1.0),
+          );
+        }
+      }
       _cloudTips = analysis.tips;
     } catch (_) {
-      // Giữ null → dùng đích hình học.
+      // giữ null → fallback hình học
     } finally {
-      _cloudResolved = true;
-      await _resumeCompositionStream();
+      if (token == _compositionAnalyzeToken) {
+        _cloudResolved = true;
+        await _resumeCompositionStream();
+      }
     }
   }
 

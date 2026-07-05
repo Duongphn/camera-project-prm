@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:doka_app/src/features/analysis/scene_analysis.dart';
 import 'package:flutter_test/flutter_test.dart';
 
