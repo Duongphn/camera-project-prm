@@ -78,11 +78,23 @@ class GeminiSceneAnalyzer implements SceneAnalyzer {
     if (candidates is! List || candidates.isEmpty) {
       throw Exception('Gemini không trả về kết quả (có thể ảnh bị chặn).');
     }
-    final parts = candidates[0]?['content']?['parts'];
-    if (parts is! List || parts.isEmpty || parts[0]?['text'] is! String) {
+    final candidate0 = candidates[0];
+    if (candidate0 is! Map) {
       throw Exception('Gemini trả về định dạng không hợp lệ.');
     }
-    final text = parts[0]['text'] as String;
+    final content = candidate0['content'];
+    if (content is! Map) {
+      throw Exception('Gemini trả về định dạng không hợp lệ.');
+    }
+    final parts = content['parts'];
+    if (parts is! List || parts.isEmpty) {
+      throw Exception('Gemini trả về định dạng không hợp lệ.');
+    }
+    final part0 = parts[0];
+    if (part0 is! Map || part0['text'] is! String) {
+      throw Exception('Gemini trả về định dạng không hợp lệ.');
+    }
+    final text = part0['text'] as String;
     final inner = jsonDecode(text) as Map<String, dynamic>;
     return parseGeminiJson(
       inner,

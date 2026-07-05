@@ -39,15 +39,15 @@ void main() {
         },
       ],
     });
-    // Cố tình KHÔNG khai báo charset trong content-type và trả về bytes UTF-8
-    // thô, để chứng minh việc giải mã phải dùng utf8.decode(resp.bodyBytes)
-    // thay vì dựa vào resp.body (có thể suy ra sai charset).
+    // Cố tình KHÔNG gửi header content-type nào cả. Gói http sẽ mặc định coi
+    // đây là 'text/plain; charset=ISO-8859-1' và resp.body sẽ giải mã sai
+    // (mojibake) các ký tự tiếng Việt nếu code dùng resp.body thay vì
+    // utf8.decode(resp.bodyBytes). Đây là cách duy nhất để test này thực sự
+    // "falsifying" được lỗi cũ, vì content-type 'application/json' không kèm
+    // charset đã được gói http (>=1.1) tự suy ra là UTF-8, khiến test pass
+    // ngay cả với code cũ (resp.body).
     final client = MockClient(
-      (req) async => http.Response.bytes(
-        utf8.encode(geminiPayload),
-        200,
-        headers: {'content-type': 'application/json'},
-      ),
+      (req) async => http.Response.bytes(utf8.encode(geminiPayload), 200),
     );
     final analyzer = GeminiSceneAnalyzer(apiKey: 'k', client: client);
 
@@ -82,4 +82,24 @@ void main() {
       throwsA(isA<Exception>()),
     );
   });
+
+  test(
+    'phản hồi 200 với candidates[0] không phải Map → ném Exception (không phải Error)',
+    () async {
+      final client = MockClient(
+        (req) async => http.Response(
+          jsonEncode({
+            'candidates': [42],
+          }),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        ),
+      );
+      final analyzer = GeminiSceneAnalyzer(apiKey: 'k', client: client);
+      expect(
+        () => analyzer.analyze(jpegBytes: _fakeJpeg(), filePath: 'x.jpg'),
+        throwsA(isA<Exception>()),
+      );
+    },
+  );
 }
