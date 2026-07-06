@@ -10,6 +10,7 @@ void main() {
         home: Stack(
           children: [
             GestureDetector(
+              behavior: HitTestBehavior.opaque,
               onTap: () => tapped = true,
               child: const SizedBox.expand(),
             ),
