@@ -193,7 +193,9 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       return;
     }
     setState(() => _processing = true);
-    _zoomAnimation?.stop(); // chụp giữa chừng zoom: giữ mức hiện tại
+    // Chụp giữa chừng zoom: dừng hẳn animation (dispose) để giữ mức zoom
+    // hiện tại của camera, tránh controller còn sống chạy ngầm không cần thiết.
+    _stopZoomAnimation();
     try {
       await _pauseCompositionStream();
       final shot = await controller.takePicture();
@@ -519,7 +521,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       // Mất dấu chủ thể đã chốt.
       if (_advice != null) setState(() => _advice = null);
       _wasAligned = false;
-      _zoomAnimation?.stop();
+      _stopZoomAnimation();
       if (!_lostNotified) {
         _lostNotified = true;
         _showMessage('Mất dấu chủ thể — bấm ⊹ để phân tích lại.');
@@ -552,6 +554,9 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     _startAutoZoom();
   }
 
+  /// Auto-zoom neo giữa khung và fill theo cạnh LỚN của crop; ảnh chụp ra là
+  /// center-zoom, không phải đúng nguyên vùng crop đề xuất — khung chỉ mang
+  /// tính dẫn hướng.
   void _startAutoZoom() {
     final crop = _cloudCrop;
     if (_controller == null || crop == null) return;
@@ -613,6 +618,10 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       _fixedTarget = null; // chốt lại đích cho chủ thể mới ở frame kế tiếp
       _lostNotified = false;
       _compositionPhase = _CompositionPhase.aiming;
+      _cloudCrop = null; // crop cũ thuộc bố cục của chủ thể trước
+      _cloudAdvice = null;
+      _aiToast = null; // toast lời khuyên cũ không còn hợp với chủ thể mới
+      _stopZoomAnimation();
       _showMessage('Đã khoá chủ thể bạn chọn — di máy cho dấu + trùng nốt tròn.');
     } else {
       _resetAnalysisState();
