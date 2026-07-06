@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
@@ -10,20 +11,24 @@ import '../../providers.dart';
 import '../analysis/scene_analysis.dart';
 import '../composition/composition_advisor.dart';
 import '../composition/composition_overlay.dart';
+import '../composition/frame_guide_overlay.dart';
 import '../composition/subject_detector.dart';
+import '../composition/zoom_advisor.dart';
 import '../filters/film_preset.dart';
 import '../filters/photo_processor.dart';
 import '../gallery/gallery_screen.dart';
 import 'capture_aspect.dart';
+import 'widgets/ai_toast_card.dart';
+import 'widgets/analyzing_sparkle_overlay.dart';
 import 'widgets/beauty_preview_filter.dart';
 import 'widgets/film_preview_filter.dart';
 import 'widgets/filter_carousel.dart';
 import 'widgets/grid_overlay.dart';
 import 'widgets/level_indicator.dart';
 
-/// Trạng thái tính năng AI bố cục: tắt → đang phân tích (1 lần, người dùng
-/// giữ nguyên máy) → đang dẫn hướng (nốt tròn + dấu +).
-enum _CompositionPhase { off, analyzing, guiding }
+/// Trạng thái AI bố cục: tắt → phân tích (giữ yên máy) → dẫn ngắm
+/// (dấu + vào vòng cầu vồng) → khung crop + tự động zoom.
+enum _CompositionPhase { off, analyzing, aiming, framing }
 
 class CameraScreen extends ConsumerStatefulWidget {
   const CameraScreen({super.key});
@@ -33,7 +38,7 @@ class CameraScreen extends ConsumerStatefulWidget {
 }
 
 class _CameraScreenState extends ConsumerState<CameraScreen>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, TickerProviderStateMixin {
   List<CameraDescription> _cameras = const [];
   CameraController? _controller;
   int _cameraIndex = 0;
@@ -58,6 +63,12 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
   bool _cloudResolved = true;
   List<String> _cloudTips = const [];
   int _compositionAnalyzeToken = 0;
+  Rect? _cloudCrop; // 0..1 viewfinder, đã map + clamp
+  String? _cloudAdvice;
+  String? _aiToast;
+  bool _needMoreZoom = false;
+  double _maxZoom = 1;
+  AnimationController? _zoomAnimation;
   String? _error;
 
   FilmPreset get _preset => filmPresets[_presetIndex];
@@ -74,6 +85,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     WidgetsBinding.instance.removeObserver(this);
     _controller?.dispose();
     _subjectDetector?.close();
+    _stopZoomAnimation();
     super.dispose();
   }
 
@@ -121,6 +133,12 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
             : ImageFormatGroup.bgra8888,
       );
       await controller.initialize();
+      double maxZoom = 1;
+      try {
+        maxZoom = await controller.getMaxZoomLevel();
+      } on CameraException {
+        // giữ 1 — coi như không zoom được
+      }
       await controller.setFlashMode(_flash);
       if (!mounted) {
         controller.dispose();
@@ -130,6 +148,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
         _controller = controller;
         _cameraIndex = index;
         _error = null;
+        _maxZoom = maxZoom;
       });
       if (_compositionPhase != _CompositionPhase.off) {
         // Camera mới (flip/resume) → phân tích lại từ đầu.
@@ -174,6 +193,9 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       return;
     }
     setState(() => _processing = true);
+    // Chụp giữa chừng zoom: dừng hẳn animation (dispose) để giữ mức zoom
+    // hiện tại của camera, tránh controller còn sống chạy ngầm không cần thiết.
+    _stopZoomAnimation();
     try {
       await _pauseCompositionStream();
       final shot = await controller.takePicture();
@@ -251,6 +273,29 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     _cloudTarget = null;
     _cloudResolved = true;
     _cloudTips = const [];
+    _cloudCrop = null;
+    _cloudAdvice = null;
+    _aiToast = null;
+    _needMoreZoom = false;
+    _stopZoomAnimation();
+  }
+
+  void _stopZoomAnimation() {
+    _zoomAnimation?.dispose();
+    _zoomAnimation = null;
+  }
+
+  /// Dừng animation và trả zoom về 1 (khi thoát chế độ/flip camera).
+  Future<void> _resetZoom() async {
+    _stopZoomAnimation();
+    final controller = _controller;
+    if (controller != null && controller.value.isInitialized) {
+      try {
+        await controller.setZoomLevel(1);
+      } on CameraException {
+        // camera đang đóng — bỏ qua
+      }
+    }
   }
 
   /// Chụp 1 ảnh tĩnh, hỏi Gemini điểm bố cục đẹp nhất. Tạm dừng stream khi
@@ -272,26 +317,69 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       final analysis = await ref
           .read(sceneAnalyzerProvider)
           .analyze(jpegBytes: bytes, filePath: shot.path);
-      if (token != _compositionAnalyzeToken) return; // đã bị lần phân tích mới thay
-      final rawTarget = analysis.targetPoint;
-      if (rawTarget != null) {
+      if (token != _compositionAnalyzeToken) return; // đã bị lần mới thay
+
+      final camera = _cameras[_cameraIndex];
+      final mirror = camera.lensDirection == CameraLensDirection.front;
+      if (analysis.targetPoint != null || analysis.cropRect != null) {
         final decoded = img.decodeImage(bytes);
         if (decoded != null) {
           final upright = img.bakeOrientation(decoded);
-          final camera = _cameras[_cameraIndex];
-          final mapped = mapImagePointToView(
-            point: rawTarget,
-            imageSize: Size(upright.width.toDouble(), upright.height.toDouble()),
-            viewAspect: _aspect.ratio,
-            mirrorX: camera.lensDirection == CameraLensDirection.front,
-          );
-          _cloudTarget = Offset(
-            mapped.dx.clamp(0.0, 1.0),
-            mapped.dy.clamp(0.0, 1.0),
-          );
+          final imageSize =
+              Size(upright.width.toDouble(), upright.height.toDouble());
+          final rawTarget = analysis.targetPoint;
+          if (rawTarget != null) {
+            final mapped = mapImagePointToView(
+              point: rawTarget,
+              imageSize: imageSize,
+              viewAspect: _aspect.ratio,
+              mirrorX: mirror,
+            );
+            _cloudTarget = Offset(
+              mapped.dx.clamp(0.0, 1.0),
+              mapped.dy.clamp(0.0, 1.0),
+            );
+          }
+          final crop = analysis.cropRect;
+          if (crop != null) {
+            final mapped = mapImageRectToView(
+              rect: Rect.fromLTWH(
+                crop.left * imageSize.width,
+                crop.top * imageSize.height,
+                crop.width * imageSize.width,
+                crop.height * imageSize.height,
+              ),
+              imageSize: imageSize,
+              viewAspect: _aspect.ratio,
+              mirrorX: mirror,
+            );
+            final clamped = Rect.fromLTRB(
+              mapped.left.clamp(0.0, 1.0),
+              mapped.top.clamp(0.0, 1.0),
+              mapped.right.clamp(0.0, 1.0),
+              mapped.bottom.clamp(0.0, 1.0),
+            );
+            // Crop quá bé sau clamp = vùng đề xuất nằm ngoài phần nhìn thấy.
+            if (clamped.width > 0.05 && clamped.height > 0.05) {
+              _cloudCrop = clamped;
+            }
+          }
+          // Không có điểm ngắm riêng → ngắm vào tâm vùng crop.
+          _cloudTarget ??= _cloudCrop?.center;
         }
       }
       _cloudTips = analysis.tips;
+      _cloudAdvice = analysis.advice;
+
+      // Tự áp filter đề xuất + toast giải thích (kiểu Doka).
+      final presetIdx =
+          filmPresets.indexWhere((p) => p.id == analysis.presetId);
+      if (mounted) {
+        setState(() {
+          if (presetIdx >= 0) _presetIndex = presetIdx;
+          _aiToast = _buildFilterToast(analysis, presetIdx);
+        });
+      }
     } catch (_) {
       // giữ null → fallback hình học
     } finally {
@@ -302,10 +390,24 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     }
   }
 
+  /// Ghép câu giải thích: "«mood» — gợi ý «filter», «reason»".
+  String? _buildFilterToast(SceneAnalysis analysis, int presetIdx) {
+    if (presetIdx < 0) return null;
+    final name = filmPresets[presetIdx].name;
+    final parts = <String>[
+      if (analysis.mood != null && analysis.mood!.isNotEmpty) analysis.mood!,
+      'gợi ý filter $name',
+      if (analysis.reason != null && analysis.reason!.isNotEmpty)
+        analysis.reason!,
+    ];
+    return parts.join(' — ');
+  }
+
   Future<void> _toggleComposition() async {
     if (_compositionPhase != _CompositionPhase.off) {
       _compositionPhase = _CompositionPhase.off;
       await _pauseCompositionStream();
+      await _resetZoom();
       _subjectDetector?.unlock();
       _resetAnalysisState();
       if (mounted) setState(() {});
@@ -314,7 +416,6 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     _resetAnalysisState();
     _compositionPhase = _CompositionPhase.analyzing;
     if (mounted) setState(() {});
-    _showMessage('Đang phân tích khung hình — giữ nguyên máy…');
     await _runCloudCompositionAnalysis();
     if (mounted) setState(() {});
   }
@@ -400,14 +501,17 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     final viewRect = _subjectViewRect(subject, camera);
     _fixedTarget = _cloudTarget ?? adviseComposition(viewRect).target;
     final advice = adviseComposition(viewRect, fixedTarget: _fixedTarget);
-    _compositionPhase = _CompositionPhase.guiding;
+    _compositionPhase = _CompositionPhase.aiming;
     _wasAligned = advice.isAligned;
     setState(() => _advice = advice);
     HapticFeedback.selectionClick();
-    final tip = _cloudTips.isNotEmpty
-        ? _cloudTips.first
-        : 'di máy cho dấu + trùng nốt tròn.';
-    _showMessage('Đã tìm điểm chụp đẹp — $tip');
+    // Nếu chưa có toast từ Gemini (offline) thì dùng tip rule-based.
+    if (_aiToast == null) {
+      final tip = _cloudTips.isNotEmpty
+          ? _cloudTips.first
+          : 'Di máy cho dấu + vào vòng tròn màu.';
+      setState(() => _aiToast = tip);
+    }
   }
 
   /// Pha dẫn hướng: chỉ bám theo chủ thể đã chốt, đích giữ nguyên.
@@ -417,6 +521,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       // Mất dấu chủ thể đã chốt.
       if (_advice != null) setState(() => _advice = null);
       _wasAligned = false;
+      _stopZoomAnimation();
       if (!_lostNotified) {
         _lostNotified = true;
         _showMessage('Mất dấu chủ thể — bấm ⊹ để phân tích lại.');
@@ -434,9 +539,51 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     );
     if (advice.isAligned && !_wasAligned) {
       HapticFeedback.lightImpact();
+      if (_compositionPhase == _CompositionPhase.aiming && _cloudCrop != null) {
+        _enterFraming();
+      }
     }
     _wasAligned = advice.isAligned;
     setState(() => _advice = advice);
+  }
+
+  /// Vào pha khung crop: hiện khung cầu vồng, toast lời khuyên, zoom mượt.
+  void _enterFraming() {
+    _compositionPhase = _CompositionPhase.framing;
+    if (_cloudAdvice != null) _aiToast = _cloudAdvice;
+    _startAutoZoom();
+  }
+
+  /// Auto-zoom neo giữa khung và fill theo cạnh LỚN của crop; ảnh chụp ra là
+  /// center-zoom, không phải đúng nguyên vùng crop đề xuất — khung chỉ mang
+  /// tính dẫn hướng.
+  void _startAutoZoom() {
+    final crop = _cloudCrop;
+    if (_controller == null || crop == null) return;
+    final side = math.max(crop.width, crop.height);
+    final target = zoomForCrop(crop, maxZoom: _maxZoom);
+    // Vùng crop cần zoom sâu hơn máy hỗ trợ → nhắc người dùng lại gần.
+    _needMoreZoom = side > 0 && 1 / side > _maxZoom + 0.01;
+    if (target <= 1.01) {
+      if (mounted) setState(() {});
+      return;
+    }
+    _stopZoomAnimation();
+    final anim = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    _zoomAnimation = anim;
+    final zoom = Tween<double>(begin: 1, end: target).animate(
+      CurvedAnimation(parent: anim, curve: Curves.easeInOut),
+    );
+    anim.addListener(() {
+      final controller = _controller;
+      if (controller == null) return;
+      controller.setZoomLevel(zoom.value).catchError((_) {});
+      if (mounted) setState(() {});
+    });
+    anim.forward();
   }
 
   Rect _subjectViewRect(SubjectDetection subject, CameraDescription camera) {
@@ -470,7 +617,11 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       _manualLock = true;
       _fixedTarget = null; // chốt lại đích cho chủ thể mới ở frame kế tiếp
       _lostNotified = false;
-      _compositionPhase = _CompositionPhase.guiding;
+      _compositionPhase = _CompositionPhase.aiming;
+      _cloudCrop = null; // crop cũ thuộc bố cục của chủ thể trước
+      _cloudAdvice = null;
+      _aiToast = null; // toast lời khuyên cũ không còn hợp với chủ thể mới
+      _stopZoomAnimation();
       _showMessage('Đã khoá chủ thể bạn chọn — di máy cho dấu + trùng nốt tròn.');
     } else {
       _resetAnalysisState();
@@ -643,6 +794,16 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
             if (_compositionPhase != _CompositionPhase.off)
               CompositionOverlay(advice: _advice),
             if (_compositionPhase == _CompositionPhase.analyzing)
+              const AnalyzingSparkleOverlay(),
+            if (_compositionPhase == _CompositionPhase.framing &&
+                _cloudCrop != null)
+              FrameGuideOverlay(
+                rect: _cloudCrop!,
+                opacity: (1 - (_zoomAnimation?.value ?? 0))
+                    .clamp(0.0, 1.0)
+                    .toDouble(),
+              ),
+            if (_compositionPhase == _CompositionPhase.analyzing)
               Positioned(
                 top: 14,
                 left: 0,
@@ -668,11 +829,41 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
                         ),
                         SizedBox(width: 9),
                         Text(
-                          'Giữ nguyên máy — đang tìm điểm chụp đẹp…',
+                          'AI đang phân tích — giữ yên máy…',
                           style:
                               TextStyle(color: Colors.white, fontSize: 12.5),
                         ),
                       ],
+                    ),
+                  ),
+                ),
+              ),
+            if (_aiToast != null &&
+                _compositionPhase != _CompositionPhase.off &&
+                _compositionPhase != _CompositionPhase.analyzing)
+              Positioned(
+                top: 12,
+                left: 12,
+                right: 12,
+                child: AiToastCard(message: _aiToast!),
+              ),
+            if (_compositionPhase == _CompositionPhase.framing &&
+                _needMoreZoom)
+              Positioned(
+                bottom: 16,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 7),
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: const Text(
+                      '✨ Tiến lại gần hoặc zoom thêm',
+                      style: TextStyle(color: Colors.white, fontSize: 12.5),
                     ),
                   ),
                 ),

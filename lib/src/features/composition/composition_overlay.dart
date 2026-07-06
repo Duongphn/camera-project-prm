@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 
 import 'composition_advisor.dart';
 
-/// Dẫn hướng bố cục kiểu ngắm: một nốt tròn đánh dấu điểm cần ngắm và một
-/// dấu + cố định giữa màn hình. Di máy cho dấu + trùng nốt tròn là chủ thể
-/// vào đúng điểm bố cục đẹp — mọi thứ chuyển xanh khi trùng.
+/// Dẫn hướng bố cục kiểu ngắm: một vòng tròn cầu vồng đánh dấu điểm cần ngắm
+/// và một dấu + cố định giữa màn hình. Di máy cho dấu + trùng vòng tròn là
+/// chủ thể vào đúng điểm bố cục đẹp — mọi thứ chuyển xanh khi trùng.
 class CompositionOverlay extends StatelessWidget {
   const CompositionOverlay({super.key, required this.advice});
 
@@ -30,9 +30,6 @@ class _CompositionPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final a = advice;
     final aligned = a?.isAligned ?? false;
-    final color = aligned
-        ? Colors.greenAccent
-        : (a?.isLocked ?? false ? Colors.amber : Colors.white);
 
     // Dấu + cố định giữa màn hình (luôn hiện khi bật AI bố cục).
     final center = Offset(size.width / 2, size.height / 2);
@@ -57,6 +54,7 @@ class _CompositionPainter extends CustomPainter {
 
     if (aligned) {
       // Trùng đích: vòng xác nhận quanh dấu +.
+      final color = Colors.greenAccent;
       canvas.drawCircle(
         center,
         18,
@@ -68,21 +66,32 @@ class _CompositionPainter extends CustomPainter {
       return;
     }
 
-    // Nốt tròn: lõi đặc + viền tối để nổi trên mọi nền.
+    // Vòng ngắm cầu vồng: halo tối để nổi trên mọi nền + viền SweepGradient.
     canvas.drawCircle(
       aim,
-      9,
-      Paint()..color = Colors.black.withValues(alpha: 0.35),
-    );
-    canvas.drawCircle(aim, 7, Paint()..color = color);
-    canvas.drawCircle(
-      aim,
-      13,
+      16,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5
-        ..color = color.withValues(alpha: 0.6),
+        ..strokeWidth = 7
+        ..color = Colors.black.withValues(alpha: 0.3),
     );
+    final ringRect = Rect.fromCircle(center: aim, radius: 15);
+    final ringPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.5
+      ..shader = const SweepGradient(
+        colors: [
+          Color(0xFFFF8A8A),
+          Color(0xFFFFD48A),
+          Color(0xFFA8FF9E),
+          Color(0xFF8AD1FF),
+          Color(0xFFC29EFF),
+          Color(0xFFFF8A8A),
+        ],
+      ).createShader(ringRect);
+    canvas.drawCircle(aim, 15, ringPaint);
+    // Chấm nhỏ ở tâm vòng giúp ngắm chính xác.
+    canvas.drawCircle(aim, 2.5, Paint()..color = Colors.white);
   }
 
   @override
