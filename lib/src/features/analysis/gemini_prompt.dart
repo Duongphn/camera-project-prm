@@ -12,6 +12,8 @@ const Map<String, dynamic> sceneResponseSchema = {
     'mood': {'type': 'STRING'},
     'targetX': {'type': 'NUMBER'},
     'targetY': {'type': 'NUMBER'},
+    'scenicX': {'type': 'NUMBER'},
+    'scenicY': {'type': 'NUMBER'},
     'tips': {
       'type': 'ARRAY',
       'items': {'type': 'STRING'},
@@ -34,6 +36,7 @@ Trả về các trường:
 - reason: vì sao chọn (tiếng Việt, tối đa 15 từ).
 - mood: mô tả ngắn ánh sáng/tông màu/bối cảnh (tiếng Việt).
 - targetX, targetY: vị trí ĐẶT CHỦ THỂ đẹp nhất theo bố cục, số thực 0..1 (gốc 0,0 ở góc trên-trái).
+- scenicX, scenicY: điểm mà CẢNH VẬT TẠI ĐÓ đẹp/thu hút nhất trong khung (điểm nhấn có sẵn trong ảnh — ví dụ ánh sáng đẹp, chi tiết nổi bật, phản chiếu...), số thực 0..1 (gốc 0,0 ở góc trên-trái).
 - tips: tối đa 3 mẹo bố cục ngắn gọn bằng tiếng Việt.
 ''';
 }
@@ -54,6 +57,13 @@ SceneAnalysis parseGeminiJson(
     target = Offset(tx, ty);
   }
 
+  Offset? scenic;
+  final sx = (json['scenicX'] as num?)?.toDouble();
+  final sy = (json['scenicY'] as num?)?.toDouble();
+  if (sx != null && sy != null && sx >= 0 && sx <= 1 && sy >= 0 && sy <= 1) {
+    scenic = Offset(sx, sy);
+  }
+
   final tips = <String>[];
   final rawTips = json['tips'];
   if (rawTips is List) {
@@ -68,6 +78,7 @@ SceneAnalysis parseGeminiJson(
     reason: (json['reason'] as String?)?.trim(),
     mood: (json['mood'] as String?)?.trim(),
     targetPoint: target,
+    scenicPoint: scenic,
     tips: tips,
     fromCloud: fromCloud,
   );

@@ -7,6 +7,7 @@ class SceneAnalysis {
     this.reason,
     this.mood,
     this.targetPoint,
+    this.scenicPoint,
     this.tips = const [],
     this.fromCloud = false,
   });
@@ -22,6 +23,10 @@ class SceneAnalysis {
 
   /// Điểm đặt chủ thể đẹp nhất, 0..1 viewfinder (gốc trên-trái). Có thể null.
   final Offset? targetPoint;
+
+  /// Điểm mà cảnh vật tại đó đẹp/thu hút nhất trong khung, 0..1 không gian
+  /// ảnh (gốc trên-trái). Dùng khi người dùng không chọn chủ thể. Có thể null.
+  final Offset? scenicPoint;
 
   /// Mẹo bố cục ngắn (tối đa 3).
   final List<String> tips;
