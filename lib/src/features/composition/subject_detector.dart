@@ -56,8 +56,6 @@ class SubjectDetector {
   List<DetectedObject> _lastObjects = const [];
   Size _lastImageSize = Size.zero;
 
-  bool get hasLock => _lockedId != null;
-
   Future<SubjectFrameResult> process({
     required CameraImage image,
     required CameraDescription camera,
@@ -116,7 +114,7 @@ class SubjectDetector {
   }
 
   /// Khoá chủ thể chứa [imagePoint] (px, ảnh upright của frame gần nhất).
-  /// Trả về true nếu khoá được; long-press vào vùng trống thì bỏ khoá.
+  /// Trả về true nếu khoá được; chạm vào vùng trống thì bỏ khoá.
   bool lockAt(Offset imagePoint) {
     for (final object in _lastObjects) {
       if (object.boundingBox.contains(imagePoint) &&
@@ -128,9 +126,6 @@ class SubjectDetector {
     _lockedId = null;
     return false;
   }
-
-  /// Khoá thẳng theo tracking ID (dùng khi phân tích tự chốt chủ thể).
-  void lockTo(int id) => _lockedId = id;
 
   void unlock() => _lockedId = null;
 

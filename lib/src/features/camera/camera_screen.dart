@@ -252,7 +252,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
 
   /// Chụp 1 ảnh tĩnh, hỏi Gemini điểm bố cục đẹp nhất. Tạm dừng stream khi
   /// chụp rồi bật lại. Lỗi/offline → giữ _cloudTarget null (fallback hình học).
-  Future<void> _runCloudCompositionAnalysis() async {
+  Future<int> _runCloudCompositionAnalysis() async {
     final controller = _controller;
     final token = ++_compositionAnalyzeToken;
     _cloudResolved = false;
@@ -261,7 +261,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     _cloudTips = const [];
     if (controller == null || !controller.value.isInitialized) {
       if (token == _compositionAnalyzeToken) _cloudResolved = true;
-      return;
+      return token;
     }
     try {
       await _pauseCompositionStream();
@@ -270,7 +270,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       final analysis = await ref
           .read(sceneAnalyzerProvider)
           .analyze(jpegBytes: bytes, filePath: shot.path);
-      if (token != _compositionAnalyzeToken) return; // đã bị lần phân tích mới thay
+      if (token != _compositionAnalyzeToken) return token; // đã bị lần phân tích mới thay
       final rawTarget = analysis.targetPoint;
       final rawScenic = analysis.scenicPoint;
       if (rawTarget != null || rawScenic != null) {
@@ -304,6 +304,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
         await _resumeCompositionStream();
       }
     }
+    return token;
   }
 
   Future<void> _toggleComposition() async {
@@ -325,8 +326,10 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
   /// thể (vẫn ở pha analyzing) → chuyển sang pha point (hiện điểm cảnh đẹp).
   Future<void> _analyzeThenSettle() async {
     _showMessage('Đang phân tích khung hình — giữ nguyên máy…');
-    await _runCloudCompositionAnalysis();
-    if (!mounted) return;
+    final token = await _runCloudCompositionAnalysis();
+    // Bị một lần phân tích mới hơn (vd. flip camera giữa chừng) thay thế → để
+    // lần mới lo phần chốt pha/thông báo, tránh nháy thông báo cũ sai.
+    if (!mounted || token != _compositionAnalyzeToken) return;
     // Người dùng có thể đã chạm chọn chủ thể trong lúc phân tích → khi đó đã
     // ở pha guiding, không ghi đè.
     if (_compositionPhase == _CompositionPhase.analyzing) {
@@ -462,14 +465,15 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       mirrorX: camera.lensDirection == CameraLensDirection.front,
     );
     final locked = detector.lockAt(imagePoint);
-    HapticFeedback.selectionClick();
     if (locked) {
+      HapticFeedback.selectionClick();
       _fixedTarget = null; // chốt lại đích cho chủ thể mới ở frame kế
       _lostNotified = false;
       _wasAligned = false;
       setState(() => _compositionPhase = _CompositionPhase.guiding);
       _showMessage('Đã chọn chủ thể — di máy cho dấu + trùng nốt tròn.');
     } else if (_compositionPhase == _CompositionPhase.guiding) {
+      HapticFeedback.selectionClick();
       detector.unlock();
       _fixedTarget = null;
       _wasAligned = false;
