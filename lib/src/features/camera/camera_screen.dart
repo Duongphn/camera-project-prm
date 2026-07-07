@@ -21,9 +21,9 @@ import 'widgets/filter_carousel.dart';
 import 'widgets/grid_overlay.dart';
 import 'widgets/level_indicator.dart';
 
-/// Trạng thái tính năng AI bố cục: tắt → đang phân tích (1 lần, người dùng
-/// giữ nguyên máy) → đang dẫn hướng (nốt tròn + dấu +).
-enum _CompositionPhase { off, analyzing, guiding }
+/// Trạng thái AI bố cục: tắt → đang phân tích (Gemini 1 lần) → hiện điểm cảnh
+/// đẹp (không chủ thể) hoặc dẫn hướng (đã chạm chọn chủ thể).
+enum _CompositionPhase { off, analyzing, point, guiding }
 
 class CameraScreen extends ConsumerStatefulWidget {
   const CameraScreen({super.key});
@@ -50,11 +50,9 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
   SubjectDetector? _subjectDetector;
   bool _wasAligned = false;
   Offset? _fixedTarget;
-  int? _candidateId;
-  int _candidateFrames = 0;
-  bool _manualLock = false;
   bool _lostNotified = false;
   Offset? _cloudTarget;
+  Offset? _scenicTarget;
   bool _cloudResolved = true;
   List<String> _cloudTips = const [];
   int _compositionAnalyzeToken = 0;
@@ -242,13 +240,11 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
 
   void _resetAnalysisState() {
     _fixedTarget = null;
-    _candidateId = null;
-    _candidateFrames = 0;
-    _manualLock = false;
     _lostNotified = false;
     _wasAligned = false;
     _advice = null;
     _cloudTarget = null;
+    _scenicTarget = null;
     _cloudResolved = true;
     _cloudTips = const [];
   }
@@ -260,6 +256,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     final token = ++_compositionAnalyzeToken;
     _cloudResolved = false;
     _cloudTarget = null;
+    _scenicTarget = null;
     _cloudTips = const [];
     if (controller == null || !controller.value.isInitialized) {
       if (token == _compositionAnalyzeToken) _cloudResolved = true;
@@ -274,21 +271,27 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
           .analyze(jpegBytes: bytes, filePath: shot.path);
       if (token != _compositionAnalyzeToken) return; // đã bị lần phân tích mới thay
       final rawTarget = analysis.targetPoint;
-      if (rawTarget != null) {
+      final rawScenic = analysis.scenicPoint;
+      if (rawTarget != null || rawScenic != null) {
         final decoded = img.decodeImage(bytes);
         if (decoded != null) {
           final upright = img.bakeOrientation(decoded);
+          final imageSize =
+              Size(upright.width.toDouble(), upright.height.toDouble());
           final camera = _cameras[_cameraIndex];
-          final mapped = mapImagePointToView(
-            point: rawTarget,
-            imageSize: Size(upright.width.toDouble(), upright.height.toDouble()),
-            viewAspect: _aspect.ratio,
-            mirrorX: camera.lensDirection == CameraLensDirection.front,
-          );
-          _cloudTarget = Offset(
-            mapped.dx.clamp(0.0, 1.0),
-            mapped.dy.clamp(0.0, 1.0),
-          );
+          final mirror = camera.lensDirection == CameraLensDirection.front;
+          Offset mapPoint(Offset p) {
+            final m = mapImagePointToView(
+              point: p,
+              imageSize: imageSize,
+              viewAspect: _aspect.ratio,
+              mirrorX: mirror,
+            );
+            return Offset(m.dx.clamp(0.0, 1.0), m.dy.clamp(0.0, 1.0));
+          }
+
+          if (rawTarget != null) _cloudTarget = mapPoint(rawTarget);
+          if (rawScenic != null) _scenicTarget = mapPoint(rawScenic);
         }
       }
       _cloudTips = analysis.tips;
@@ -316,7 +319,22 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     if (mounted) setState(() {});
     _showMessage('Đang phân tích khung hình — giữ nguyên máy…');
     await _runCloudCompositionAnalysis();
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    // Người dùng có thể đã chạm chọn chủ thể trong lúc phân tích → khi đó đã
+    // ở pha guiding, không ghi đè.
+    if (_compositionPhase == _CompositionPhase.analyzing) {
+      setState(() => _compositionPhase = _CompositionPhase.point);
+      if (_scenicTarget != null) {
+        final tip =
+            _cloudTips.isNotEmpty ? _cloudTips.first : 'Đặt điểm nhấn vào đây.';
+        _showMessage('Điểm cảnh đẹp nhất đây — $tip Chạm vào chủ thể nếu muốn bám theo.');
+      } else {
+        _showMessage(
+            'Chưa tìm được điểm đẹp (cần mạng). Dùng lưới 1/3 hoặc chạm chọn chủ thể.');
+      }
+    } else {
+      setState(() {});
+    }
   }
 
   Future<void> _startCompositionStream() async {
@@ -369,67 +387,39 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
           result.skipped) {
         return;
       }
-      if (_compositionPhase == _CompositionPhase.analyzing) {
-        _handleAnalyzingFrame(result.subject, camera);
-      } else {
+      // Detector.process (ở trên) đã cập nhật _lastObjects cho việc chạm chọn.
+      // Chỉ pha guiding mới bám theo chủ thể đã khoá theo từng frame.
+      if (_compositionPhase == _CompositionPhase.guiding) {
         _handleGuidingFrame(result.subject, camera);
       }
     });
   }
 
-  /// Pha phân tích: chờ chủ thể ổn định 3 frame liên tiếp rồi chốt
-  /// chủ thể + điểm đích MỘT LẦN, chuyển sang pha dẫn hướng.
-  void _handleAnalyzingFrame(
-      SubjectDetection? subject, CameraDescription camera) {
-    final id = subject?.trackingId;
-    if (subject == null || id == null) {
-      _candidateId = null;
-      _candidateFrames = 0;
-      return;
-    }
-    if (id == _candidateId) {
-      _candidateFrames++;
-    } else {
-      _candidateId = id;
-      _candidateFrames = 1;
-    }
-    if (_candidateFrames < 3) return;
-    if (!_cloudResolved) return; // chờ Gemini trả điểm bố cục
-
-    _subjectDetector!.lockTo(id);
-    final viewRect = _subjectViewRect(subject, camera);
-    _fixedTarget = _cloudTarget ?? adviseComposition(viewRect).target;
-    final advice = adviseComposition(viewRect, fixedTarget: _fixedTarget);
-    _compositionPhase = _CompositionPhase.guiding;
-    _wasAligned = advice.isAligned;
-    setState(() => _advice = advice);
-    HapticFeedback.selectionClick();
-    final tip = _cloudTips.isNotEmpty
-        ? _cloudTips.first
-        : 'di máy cho dấu + trùng nốt tròn.';
-    _showMessage('Đã tìm điểm chụp đẹp — $tip');
-  }
-
-  /// Pha dẫn hướng: chỉ bám theo chủ thể đã chốt, đích giữ nguyên.
+  /// Pha dẫn hướng: bám chủ thể đã chạm chọn; mất dấu → về hiện điểm cảnh đẹp.
   void _handleGuidingFrame(
       SubjectDetection? subject, CameraDescription camera) {
     if (subject == null || !subject.isLocked) {
-      // Mất dấu chủ thể đã chốt.
-      if (_advice != null) setState(() => _advice = null);
+      _fixedTarget = null;
+      _compositionPhase = _CompositionPhase.point;
       _wasAligned = false;
+      setState(() => _advice = null);
       if (!_lostNotified) {
         _lostNotified = true;
-        _showMessage('Mất dấu chủ thể — bấm ⊹ để phân tích lại.');
+        _showMessage('Mất dấu chủ thể — hiện điểm cảnh đẹp. Chạm lại để chọn.');
       }
       return;
     }
     _lostNotified = false;
     final viewRect = _subjectViewRect(subject, camera);
-    // Sau long-press đổi chủ thể, đích được chốt lại một lần cho chủ thể mới.
-    _fixedTarget ??= adviseComposition(viewRect).target;
+    // Chốt đích MỘT LẦN, và chỉ khi Gemini đã trả lời (tránh chốt nhầm hình học
+    // khi cloud chưa xong).
+    if (_fixedTarget == null && _cloudResolved) {
+      _fixedTarget = _cloudTarget ?? adviseComposition(viewRect).target;
+    }
+    if (_fixedTarget == null) return; // chờ Gemini
     final advice = adviseComposition(
       viewRect,
-      isLocked: _manualLock,
+      isLocked: true,
       fixedTarget: _fixedTarget,
     );
     if (advice.isAligned && !_wasAligned) {
@@ -448,9 +438,9 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     );
   }
 
-  /// Long-press trên viewfinder: tự chọn chủ thể tại điểm bấm;
-  /// bấm vùng trống → phân tích lại từ đầu.
-  void _onViewfinderLongPress(Offset localPosition, Size viewSize) {
+  /// Chạm trên viewfinder: chạm trúng vật thể → khoá làm chủ thể (pha guiding);
+  /// chạm vùng trống → bỏ chủ thể, quay về hiện điểm cảnh đẹp (pha point).
+  void _onViewfinderTap(Offset localPosition, Size viewSize) {
     final detector = _subjectDetector;
     if (_compositionPhase == _CompositionPhase.off || detector == null) return;
     if (detector.lastImageSize == Size.zero) return;
@@ -467,16 +457,20 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     final locked = detector.lockAt(imagePoint);
     HapticFeedback.selectionClick();
     if (locked) {
-      _manualLock = true;
-      _fixedTarget = null; // chốt lại đích cho chủ thể mới ở frame kế tiếp
+      _fixedTarget = null; // chốt lại đích cho chủ thể mới ở frame kế
       _lostNotified = false;
-      _compositionPhase = _CompositionPhase.guiding;
-      _showMessage('Đã khoá chủ thể bạn chọn — di máy cho dấu + trùng nốt tròn.');
-    } else {
-      _resetAnalysisState();
-      _compositionPhase = _CompositionPhase.analyzing;
-      setState(() {});
-      _showMessage('Đang phân tích lại — giữ nguyên máy.');
+      _wasAligned = false;
+      setState(() => _compositionPhase = _CompositionPhase.guiding);
+      _showMessage('Đã chọn chủ thể — di máy cho dấu + trùng nốt tròn.');
+    } else if (_compositionPhase == _CompositionPhase.guiding) {
+      detector.unlock();
+      _fixedTarget = null;
+      _wasAligned = false;
+      setState(() {
+        _advice = null;
+        _compositionPhase = _CompositionPhase.point;
+      });
+      _showMessage('Đã bỏ chủ thể — hiện điểm cảnh đẹp.');
     }
   }
 
@@ -616,7 +610,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       child: ClipRect(
         child: LayoutBuilder(
           builder: (context, constraints) => GestureDetector(
-            onLongPressStart: (details) => _onViewfinderLongPress(
+            onTapUp: (details) => _onViewfinderTap(
               details.localPosition,
               constraints.biggest,
             ),
@@ -640,8 +634,13 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
             ),
             if (_showGrid) const GridOverlay(),
             const LevelIndicator(),
-            if (_compositionPhase != _CompositionPhase.off)
+            if (_compositionPhase == _CompositionPhase.guiding)
               CompositionOverlay(advice: _advice),
+            if (_compositionPhase == _CompositionPhase.point)
+              CompositionOverlay(
+                scenicPoint: _scenicTarget,
+                showThirdsHint: _scenicTarget == null,
+              ),
             if (_compositionPhase == _CompositionPhase.analyzing)
               Positioned(
                 top: 14,
