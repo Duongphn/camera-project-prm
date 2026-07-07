@@ -8,6 +8,8 @@ class SceneAnalysis {
     this.mood,
     this.targetPoint,
     this.scenicPoint,
+    this.cropRect,
+    this.advice,
     this.tips = const [],
     this.fromCloud = false,
   });
@@ -27,6 +29,13 @@ class SceneAnalysis {
   /// Điểm mà cảnh vật tại đó đẹp/thu hút nhất trong khung, 0..1 không gian
   /// ảnh (gốc trên-trái). Dùng khi người dùng không chọn chủ thể. Có thể null.
   final Offset? scenicPoint;
+
+  /// Vùng crop đẹp nhất trên ảnh, 0..1 (gốc trên-trái). Null nếu Gemini
+  /// không trả hoặc không hợp lệ.
+  final Rect? cropRect;
+
+  /// Lời khuyên bố cục chi tiết (tiếng Việt) để hiện cho người dùng.
+  final String? advice;
 
   /// Mẹo bố cục ngắn (tối đa 3).
   final List<String> tips;

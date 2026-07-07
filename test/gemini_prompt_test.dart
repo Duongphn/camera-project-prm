@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:doka_app/src/features/analysis/gemini_prompt.dart';
 import 'package:doka_app/src/features/filters/film_preset.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -82,5 +84,67 @@ void main() {
       validIds: ids,
     );
     expect(a.scenicPoint, isNull);
+  });
+
+  test('parse cropRect + advice hợp lệ', () {
+    final a = parseGeminiJson({
+      'presetId': 'dalat',
+      'cropX': 0.1,
+      'cropY': 0.2,
+      'cropW': 0.5,
+      'cropH': 0.6,
+      'advice': ' Ảnh dọc, chủ thể căn giữa, chừa khoảng trống. ',
+    }, validIds: ids);
+    expect(a.cropRect, const Rect.fromLTWH(0.1, 0.2, 0.5, 0.6));
+    expect(a.advice, 'Ảnh dọc, chủ thể căn giữa, chừa khoảng trống.');
+  });
+
+  test('cropRect thiếu trường hoặc tràn khung → null', () {
+    // thiếu cropH
+    expect(
+      parseGeminiJson(
+        {'presetId': 'dalat', 'cropX': 0.1, 'cropY': 0.1, 'cropW': 0.5},
+        validIds: ids,
+      ).cropRect,
+      isNull,
+    );
+    // w = 0
+    expect(
+      parseGeminiJson(
+        {'presetId': 'dalat', 'cropX': 0.1, 'cropY': 0.1, 'cropW': 0.0, 'cropH': 0.5},
+        validIds: ids,
+      ).cropRect,
+      isNull,
+    );
+    // tràn phải: x + w > 1
+    expect(
+      parseGeminiJson(
+        {'presetId': 'dalat', 'cropX': 0.7, 'cropY': 0.1, 'cropW': 0.5, 'cropH': 0.5},
+        validIds: ids,
+      ).cropRect,
+      isNull,
+    );
+  });
+
+  test('advice rỗng → null; mặc định cropRect/advice null', () {
+    final a = parseGeminiJson(
+      {'presetId': 'dalat', 'advice': '   '},
+      validIds: ids,
+    );
+    expect(a.advice, isNull);
+    expect(a.cropRect, isNull);
+  });
+
+  test('schema và prompt khai báo trường crop + advice', () {
+    final props =
+        sceneResponseSchema['properties'] as Map<String, dynamic>;
+    expect(props.containsKey('cropX'), isTrue);
+    expect(props.containsKey('cropY'), isTrue);
+    expect(props.containsKey('cropW'), isTrue);
+    expect(props.containsKey('cropH'), isTrue);
+    expect(props.containsKey('advice'), isTrue);
+    final prompt = buildScenePrompt(filmPresets);
+    expect(prompt.contains('cropX'), isTrue);
+    expect(prompt.contains('advice'), isTrue);
   });
 }

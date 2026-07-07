@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 import 'composition_advisor.dart';
 
 /// Overlay bố cục. Ba chế độ vẽ:
-/// - [advice] != null: dẫn ngắm (dấu + giữa + nốt tròn đích) — có chủ thể.
+/// - [advice] != null: dẫn ngắm (dấu + giữa + vòng tròn cầu vồng đích) — có
+///   chủ thể. Di máy cho dấu + trùng vòng tròn là chủ thể vào điểm đẹp.
 /// - [advice] == null & [scenicPoint] != null: nốt tròn tĩnh tại điểm cảnh
 ///   đẹp nhất (0..1 viewfinder) — không chủ thể, còn mạng.
 /// - [advice] == null & [scenicPoint] == null & [showThirdsHint]: mờ 4 giao
@@ -98,6 +99,7 @@ class CompositionPainter extends CustomPainter {
     );
 
     if (aligned) {
+      // Trùng đích: vòng xác nhận quanh dấu +.
       canvas.drawCircle(
         center,
         18,
@@ -109,7 +111,32 @@ class CompositionPainter extends CustomPainter {
       return;
     }
 
-    _paintDot(canvas, aim, color: color);
+    // Vòng ngắm cầu vồng: halo tối để nổi trên mọi nền + viền SweepGradient.
+    canvas.drawCircle(
+      aim,
+      16,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 7
+        ..color = Colors.black.withValues(alpha: 0.3),
+    );
+    final ringRect = Rect.fromCircle(center: aim, radius: 15);
+    final ringPaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3.5
+      ..shader = const SweepGradient(
+        colors: [
+          Color(0xFFFF8A8A),
+          Color(0xFFFFD48A),
+          Color(0xFFA8FF9E),
+          Color(0xFF8AD1FF),
+          Color(0xFFC29EFF),
+          Color(0xFFFF8A8A),
+        ],
+      ).createShader(ringRect);
+    canvas.drawCircle(aim, 15, ringPaint);
+    // Chấm nhỏ ở tâm vòng giúp ngắm chính xác.
+    canvas.drawCircle(aim, 2.5, Paint()..color = Colors.white);
   }
 
   @override

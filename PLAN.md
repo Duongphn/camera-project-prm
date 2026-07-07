@@ -52,7 +52,9 @@ App gốc chưa có Android chính thức (người dùng VN than phiền điề
 
 ### Giai đoạn 3 — AI Composition (4–6 tuần, phần khó nhất)
 - ✅ v1 rule-based (đã code xong, chờ test máy thật): ML Kit **object detection stream mode** (model bundled, có tracking ID — thay cho subject segmentation vì segmentation chỉ có Android và không realtime) xác định chủ thể → điểm thirds gần nhất (chủ thể >35% khung thì căn giữa) → overlay khung + mũi tên + điểm đích, chuyển xanh + haptic khi vào bố cục; long-press khoá chủ thể theo tracking ID.
+- ✅ v1.5 guided shot kiểu Doka (đã code xong, chờ test máy thật): 4 pha off→analyzing→aiming→framing — hiệu ứng chấm sáng phân tích, vòng ngắm cầu vồng, khung crop Gemini + tự động zoom (căn tâm trước, zoom sau), tự áp filter kèm toast giải thích. Spec: docs/superpowers/specs/2026-07-06-guided-ai-composition-design.md.
 - ⚠️ 3 giả định phải kiểm chứng trên máy thật: analysis frame và preview cùng center-crop; chiều mirror camera trước; hệ toạ độ box ML Kit sau xoay. Toàn bộ toán map nằm trong `composition_advisor.dart` (pure, có test) — lệch thì chỉnh một chỗ.
+- ⚠️ Giả định thứ 4 (mới): cropRect Gemini trả về khớp vùng nhìn thấy sau center-crop preview; toán map nằm trong _runCloudCompositionAnalysis → mapImageRectToView.
 - ⬜ v2 ML: model chấm điểm bố cục TFLite (dataset ảnh mobile đẹp) — R&D riêng, không chặn release.
 
 ### Giai đoạn 4 — Monetization + phát hành (2–3 tuần)
