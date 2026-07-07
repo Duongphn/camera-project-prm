@@ -59,6 +59,33 @@ void main() {
     expect(a.tips, ['a', 'b', 'c']);
   });
 
+  test('prompt có mô tả điểm cảnh đẹp scenicX', () {
+    final prompt = buildScenePrompt(filmPresets);
+    expect(prompt.contains('scenicX'), isTrue);
+  });
+
+  test('parse scenicX/scenicY hợp lệ thành scenicPoint', () {
+    final a = parseGeminiJson({
+      'presetId': 'dalat',
+      'scenicX': 0.25,
+      'scenicY': 0.75,
+    }, validIds: ids);
+    expect(a.scenicPoint, const Offset(0.25, 0.75));
+  });
+
+  test('thiếu scenic toạ độ → scenicPoint null', () {
+    final a = parseGeminiJson({'presetId': 'dalat'}, validIds: ids);
+    expect(a.scenicPoint, isNull);
+  });
+
+  test('scenic toạ độ ngoài [0,1] bị loại', () {
+    final a = parseGeminiJson(
+      {'presetId': 'dalat', 'scenicX': -0.1, 'scenicY': 0.5},
+      validIds: ids,
+    );
+    expect(a.scenicPoint, isNull);
+  });
+
   test('parse cropRect + advice hợp lệ', () {
     final a = parseGeminiJson({
       'presetId': 'dalat',
