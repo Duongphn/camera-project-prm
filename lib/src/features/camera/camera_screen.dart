@@ -60,6 +60,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
   bool _manualLock = false;
   bool _lostNotified = false;
   Offset? _cloudTarget;
+  Offset? _scenicTarget; // 0..1 viewfinder — điểm cảnh đẹp khi chưa có chủ thể
   bool _cloudResolved = true;
   List<String> _cloudTips = const [];
   int _compositionAnalyzeToken = 0;
@@ -271,6 +272,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     _wasAligned = false;
     _advice = null;
     _cloudTarget = null;
+    _scenicTarget = null;
     _cloudResolved = true;
     _cloudTips = const [];
     _cloudCrop = null;
@@ -305,6 +307,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     final token = ++_compositionAnalyzeToken;
     _cloudResolved = false;
     _cloudTarget = null;
+    _scenicTarget = null;
     _cloudTips = const [];
     if (controller == null || !controller.value.isInitialized) {
       if (token == _compositionAnalyzeToken) _cloudResolved = true;
@@ -321,12 +324,27 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
 
       final camera = _cameras[_cameraIndex];
       final mirror = camera.lensDirection == CameraLensDirection.front;
-      if (analysis.targetPoint != null || analysis.cropRect != null) {
+      if (analysis.targetPoint != null ||
+          analysis.cropRect != null ||
+          analysis.scenicPoint != null) {
         final decoded = img.decodeImage(bytes);
         if (decoded != null) {
           final upright = img.bakeOrientation(decoded);
           final imageSize =
               Size(upright.width.toDouble(), upright.height.toDouble());
+          final rawScenic = analysis.scenicPoint;
+          if (rawScenic != null) {
+            final mapped = mapImagePointToView(
+              point: rawScenic,
+              imageSize: imageSize,
+              viewAspect: _aspect.ratio,
+              mirrorX: mirror,
+            );
+            _scenicTarget = Offset(
+              mapped.dx.clamp(0.0, 1.0),
+              mapped.dy.clamp(0.0, 1.0),
+            );
+          }
           final rawTarget = analysis.targetPoint;
           if (rawTarget != null) {
             final mapped = mapImagePointToView(
@@ -793,8 +811,17 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
             const LevelIndicator(),
             if (_compositionPhase != _CompositionPhase.off)
               CompositionOverlay(advice: _advice),
-            if (_compositionPhase == _CompositionPhase.analyzing)
+            // Đang chờ Gemini → hiệu ứng sparkle. Xong mà chưa có chủ thể nào
+            // tự khoá → nốt tròn điểm cảnh đẹp (hoặc lưới 1/3 khi offline).
+            if (_compositionPhase == _CompositionPhase.analyzing &&
+                !_cloudResolved)
               const AnalyzingSparkleOverlay(),
+            if (_compositionPhase == _CompositionPhase.analyzing &&
+                _cloudResolved)
+              CompositionOverlay(
+                scenicPoint: _scenicTarget,
+                showThirdsHint: _scenicTarget == null,
+              ),
             if (_compositionPhase == _CompositionPhase.framing &&
                 _cloudCrop != null)
               FrameGuideOverlay(
@@ -803,7 +830,8 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
                     .clamp(0.0, 1.0)
                     .toDouble(),
               ),
-            if (_compositionPhase == _CompositionPhase.analyzing)
+            if (_compositionPhase == _CompositionPhase.analyzing &&
+                !_cloudResolved)
               Positioned(
                 top: 14,
                 left: 0,
@@ -834,6 +862,31 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
                               TextStyle(color: Colors.white, fontSize: 12.5),
                         ),
                       ],
+                    ),
+                  ),
+                ),
+              ),
+            // Đã phân tích xong nhưng chưa có chủ thể: mời hướng máy vào chủ thể.
+            if (_compositionPhase == _CompositionPhase.analyzing &&
+                _cloudResolved)
+              Positioned(
+                top: 14,
+                left: 12,
+                right: 12,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      _scenicTarget != null
+                          ? 'Điểm cảnh đẹp nhất đây — hướng máy vào chủ thể để được dẫn ngắm.'
+                          : 'Ngoại tuyến — dùng lưới 1/3. Hướng máy vào chủ thể để dẫn ngắm.',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.white, fontSize: 12.5),
                     ),
                   ),
                 ),
