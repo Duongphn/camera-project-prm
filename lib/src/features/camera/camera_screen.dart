@@ -135,6 +135,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
         _resetAnalysisState();
         _compositionPhase = _CompositionPhase.analyzing;
         await _startCompositionStream();
+        await _analyzeThenSettle();
       }
     } on CameraException catch (e) {
       if (mounted) {
@@ -317,6 +318,12 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     _resetAnalysisState();
     _compositionPhase = _CompositionPhase.analyzing;
     if (mounted) setState(() {});
+    await _analyzeThenSettle();
+  }
+
+  /// Chạy phân tích Gemini 1 lần rồi chốt: nếu người dùng chưa chạm chọn chủ
+  /// thể (vẫn ở pha analyzing) → chuyển sang pha point (hiện điểm cảnh đẹp).
+  Future<void> _analyzeThenSettle() async {
     _showMessage('Đang phân tích khung hình — giữ nguyên máy…');
     await _runCloudCompositionAnalysis();
     if (!mounted) return;
