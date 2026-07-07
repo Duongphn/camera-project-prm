@@ -24,15 +24,16 @@ class CompositionOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     return IgnorePointer(
       child: CustomPaint(
-        painter: _CompositionPainter(advice, scenicPoint, showThirdsHint),
+        painter: CompositionPainter(advice, scenicPoint, showThirdsHint),
         size: Size.infinite,
       ),
     );
   }
 }
 
-class _CompositionPainter extends CustomPainter {
-  _CompositionPainter(this.advice, this.scenicPoint, this.showThirdsHint);
+/// Public để test có thể vẽ trực tiếp lên canvas giả lập và kiểm tra hành vi.
+class CompositionPainter extends CustomPainter {
+  CompositionPainter(this.advice, this.scenicPoint, this.showThirdsHint);
 
   final CompositionAdvice? advice;
   final Offset? scenicPoint;
@@ -60,16 +61,16 @@ class _CompositionPainter extends CustomPainter {
   }
 
   /// Nốt tròn nổi trên mọi nền: lõi đặc + viền tối + vòng ngoài mờ.
-  void _paintDot(Canvas canvas, Offset c) {
+  void _paintDot(Canvas canvas, Offset c, {Color color = Colors.white}) {
     canvas.drawCircle(c, 9, Paint()..color = Colors.black.withValues(alpha: 0.35));
-    canvas.drawCircle(c, 7, Paint()..color = Colors.white);
+    canvas.drawCircle(c, 7, Paint()..color = color);
     canvas.drawCircle(
       c,
       13,
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.5
-        ..color = Colors.white.withValues(alpha: 0.6),
+        ..color = color.withValues(alpha: 0.6),
     );
   }
 
@@ -108,20 +109,11 @@ class _CompositionPainter extends CustomPainter {
       return;
     }
 
-    canvas.drawCircle(aim, 9, Paint()..color = Colors.black.withValues(alpha: 0.35));
-    canvas.drawCircle(aim, 7, Paint()..color = color);
-    canvas.drawCircle(
-      aim,
-      13,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5
-        ..color = color.withValues(alpha: 0.6),
-    );
+    _paintDot(canvas, aim, color: color);
   }
 
   @override
-  bool shouldRepaint(covariant _CompositionPainter oldDelegate) =>
+  bool shouldRepaint(covariant CompositionPainter oldDelegate) =>
       oldDelegate.advice != advice ||
       oldDelegate.scenicPoint != scenicPoint ||
       oldDelegate.showThirdsHint != showThirdsHint;
