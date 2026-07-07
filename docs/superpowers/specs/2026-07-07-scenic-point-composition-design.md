@@ -3,6 +3,19 @@
 Ngày: 2026-07-07
 Nhánh: `feat/gemini-vision-scene-analysis`
 
+> **Cập nhật hoà giải (2026-07-08):** Sau khi thiết kế này được hiện thực, nhánh
+> `main` đã merge PR #4 ("guided AI composition 4 pha kiểu Doka":
+> `off/analyzing/aiming/framing` + auto-zoom + auto-filter + crop frame +
+> sparkle + long-press chọn chủ thể + tự khoá sau 3 frame). Theo quyết định
+> giữ luồng PR #4 làm nền, bản **thực tế merge KHÁC** tài liệu dưới đây:
+> - **Không** thêm pha `point`/cử chỉ `tap` riêng, **không** bỏ auto-detect
+>   hay long-press — giữ nguyên toàn bộ luồng PR #4.
+> - Phần "điểm cảnh đẹp" (`scenicPoint`) được **ghép làm trạng thái nghỉ**:
+>   khi phân tích xong (`_cloudResolved`) mà chưa có chủ thể nào tự khoá, hiện
+>   nốt tròn tĩnh tại điểm cảnh đẹp (hoặc lưới 1/3 khi offline) trong pha
+>   `analyzing`. `scenicPoint` cộng gộp với `cropRect`/`advice` của PR #4 trong
+>   cùng 1 lần gọi Gemini. Phần mô tả bên dưới giữ lại làm bối cảnh thiết kế gốc.
+
 ## Mục tiêu
 
 Cho tính năng **AI bố cục** (nút ⊹):
