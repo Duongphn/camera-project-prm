@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -21,6 +22,20 @@ class _Adjustment {
   final double min;
   final double max;
   final double neutral;
+}
+
+/// Mã hoá RGBA → JPEG trong isolate riêng.
+///
+/// Phải là hàm CẤP CAO NHẤT (không phải method của State): closure gửi sang
+/// isolate chỉ được bắt các tham số thuần (rgba/width/height đều gửi được).
+/// Nếu đặt trong method, closure sẽ bắt luôn `this` → kéo theo `ui.Image` của
+/// State (không gửi được) → lỗi "object is unsendable".
+Future<Uint8List> _encodeJpegInIsolate(
+  Uint8List rgba,
+  int width,
+  int height,
+) {
+  return Isolate.run(() => encodeRgbaToJpeg(rgba, width, height));
 }
 
 /// Chấm đồng nhỏ báo thông số đã bị chỉnh khỏi mặc định.
@@ -157,9 +172,7 @@ class _EditScreenState extends ConsumerState<EditScreen> {
         final rgba = raw.buffer.asUint8List();
         final width = rendered.width;
         final height = rendered.height;
-        final jpeg = await Isolate.run(
-          () => encodeRgbaToJpeg(rgba, width, height),
-        );
+        final jpeg = await _encodeJpegInIsolate(rgba, width, height);
         final file = await ref.read(photoRepositoryProvider).savePhoto(jpeg);
         await PhotoProcessor.saveToSystemGallery(file);
       } finally {
