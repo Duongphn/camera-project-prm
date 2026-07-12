@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/theme.dart';
 import '../../providers.dart';
 import '../editor/edit_screen.dart';
 
@@ -32,36 +33,29 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: DokaColors.body,
       appBar: AppBar(
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        title: const Text('Ảnh của bạn'),
+        backgroundColor: DokaColors.body,
+        foregroundColor: DokaColors.ink,
+        elevation: 0,
+        title: const Text('Ảnh của bạn', style: DokaType.title),
       ),
       body: FutureBuilder<List<File>>(
         future: _photos,
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
             return const Center(
-              child: CircularProgressIndicator(color: Colors.white24),
+              child: CircularProgressIndicator(color: DokaColors.brassDeep),
             );
           }
           final photos = snapshot.data ?? const [];
-          if (photos.isEmpty) {
-            return const Center(
-              child: Text(
-                'Chưa có ảnh nào.\nQuay lại và bấm nút chụp thôi!',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white54),
-              ),
-            );
-          }
+          if (photos.isEmpty) return _buildEmpty();
           return GridView.builder(
-            padding: const EdgeInsets.all(2),
+            padding: const EdgeInsets.all(DokaSpacing.md),
             gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: 3,
-              mainAxisSpacing: 2,
-              crossAxisSpacing: 2,
+              mainAxisSpacing: DokaSpacing.sm,
+              crossAxisSpacing: DokaSpacing.sm,
             ),
             itemCount: photos.length,
             itemBuilder: (context, index) {
@@ -78,15 +72,53 @@ class _GalleryScreenState extends ConsumerState<GalleryScreen> {
                   );
                   _reload();
                 },
-                child: Image.file(
-                  file,
-                  fit: BoxFit.cover,
-                  cacheWidth: 360,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Container(
+                    color: DokaColors.surface,
+                    child: Image.file(
+                      file,
+                      fit: BoxFit.cover,
+                      cacheWidth: 360,
+                    ),
+                  ),
                 ),
               );
             },
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildEmpty() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              color: DokaColors.surface,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+            ),
+            child: const Icon(Icons.camera_roll_outlined,
+                color: DokaColors.brass, size: 32),
+          ),
+          const SizedBox(height: DokaSpacing.lg),
+          const Text(
+            'Chưa có ảnh nào',
+            style: DokaType.title,
+          ),
+          const SizedBox(height: DokaSpacing.sm),
+          const Text(
+            'Quay lại và bấm nút chụp thôi!',
+            textAlign: TextAlign.center,
+            style: DokaType.caption,
+          ),
+        ],
       ),
     );
   }
@@ -126,18 +158,25 @@ class _PhotoViewerState extends ConsumerState<_PhotoViewer> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Xoá ảnh này?'),
+        backgroundColor: DokaColors.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(DokaRadius.card),
+        ),
+        title: const Text('Xoá ảnh này?', style: DokaType.title),
         content: const Text(
           'Ảnh chỉ bị xoá khỏi thư viện của app. '
           'Bản đã lưu trong thư viện máy (nếu có) vẫn còn.',
+          style: DokaType.caption,
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
+            style: TextButton.styleFrom(foregroundColor: DokaColors.inkMuted),
             child: const Text('Huỷ'),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(foregroundColor: DokaColors.shutter),
             child: const Text('Xoá'),
           ),
         ],
@@ -157,11 +196,15 @@ class _PhotoViewerState extends ConsumerState<_PhotoViewer> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: DokaColors.body,
       appBar: AppBar(
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        title: Text('${_current + 1}/${_photos.length}'),
+        backgroundColor: DokaColors.body,
+        foregroundColor: DokaColors.ink,
+        elevation: 0,
+        title: Text(
+          '${_current + 1} / ${_photos.length}',
+          style: DokaType.meter,
+        ),
         actions: [
           IconButton(
             tooltip: 'Chỉnh ảnh',
