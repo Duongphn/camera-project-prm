@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image/image.dart' as img;
 
+import '../../core/theme.dart';
 import '../../providers.dart';
 import '../analysis/scene_analysis.dart';
 import '../composition/composition_advisor.dart';
@@ -664,7 +665,7 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: DokaColors.body,
       body: SafeArea(
         child: _error != null
             ? _buildError()
@@ -672,8 +673,14 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
                 children: [
                   _buildTopBar(),
                   Expanded(child: Center(child: _buildViewfinder())),
-                  const SizedBox(height: 12),
-                  if (_showBeautySlider) _buildBeautySlider(),
+                  const SizedBox(height: DokaSpacing.lg),
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeOut,
+                    child: _showBeautySlider
+                        ? _buildBeautySlider()
+                        : const SizedBox(width: double.infinity),
+                  ),
                   FilterCarousel(
                     selectedIndex: _presetIndex,
                     onSelected: (i) => setState(() => _presetIndex = i),
@@ -688,23 +695,28 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
   Widget _buildError() {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(DokaSpacing.xl),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.no_photography, color: Colors.white38, size: 48),
-            const SizedBox(height: 16),
+            const Icon(Icons.no_photography,
+                color: DokaColors.inkFaint, size: 48),
+            const SizedBox(height: DokaSpacing.lg),
             Text(
               _error!,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white70),
+              style: DokaType.body.copyWith(color: DokaColors.inkMuted),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: DokaSpacing.xl),
             OutlinedButton(
               onPressed: () {
                 setState(() => _error = null);
                 _initCameras();
               },
+              style: OutlinedButton.styleFrom(
+                foregroundColor: DokaColors.brass,
+                side: const BorderSide(color: DokaColors.brass),
+              ),
               child: const Text('Thử lại'),
             ),
           ],
@@ -714,82 +726,140 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
   }
 
   Widget _buildTopBar() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+    return Container(
+      margin: const EdgeInsets.fromLTRB(
+          DokaSpacing.md, DokaSpacing.sm, DokaSpacing.md, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+      decoration: BoxDecoration(
+        color: DokaColors.glass(0.35),
+        borderRadius: BorderRadius.circular(DokaRadius.card),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+      ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          IconButton(
-            onPressed: _cycleFlash,
-            icon: Icon(_flashIcon, color: Colors.white),
+          _toolButton(
+            icon: _flashIcon,
+            active: _flash != FlashMode.off,
+            onTap: _cycleFlash,
+            tooltip: 'Đèn flash',
           ),
-          TextButton(
-            onPressed: () => setState(() => _aspect = _aspect.next),
-            child: Text(
-              _aspect.label,
-              style: const TextStyle(color: Colors.white, fontSize: 15),
+          // Tỉ lệ khung như chỉ số trên đồng hồ đo sáng.
+          GestureDetector(
+            onTap: () => setState(() => _aspect = _aspect.next),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                    color: DokaColors.brass.withValues(alpha: 0.55)),
+              ),
+              child: Text(
+                _aspect.label,
+                style: DokaType.meter.copyWith(
+                    fontSize: 13, color: DokaColors.brass),
+              ),
             ),
           ),
-          IconButton(
-            onPressed: () => setState(() => _showGrid = !_showGrid),
-            icon: Icon(
-              Icons.grid_3x3,
-              color: _showGrid ? Colors.amber : Colors.white,
-            ),
+          _toolButton(
+            icon: Icons.grid_3x3,
+            active: _showGrid,
+            onTap: () => setState(() => _showGrid = !_showGrid),
+            tooltip: 'Lưới 1/3',
           ),
-          IconButton(
-            tooltip: 'Làm mịn da',
-            onPressed: () =>
+          _toolButton(
+            icon: Icons.face_retouching_natural,
+            active: _beauty > 0,
+            onTap: () =>
                 setState(() => _showBeautySlider = !_showBeautySlider),
-            icon: Icon(
-              Icons.face_retouching_natural,
-              color: _beauty > 0 ? Colors.amber : Colors.white,
-            ),
+            tooltip: 'Làm mịn da',
           ),
-          IconButton(
+          _toolButton(
+            icon: Icons.center_focus_strong,
+            active: _compositionPhase != _CompositionPhase.off,
+            onTap: _toggleComposition,
             tooltip: 'AI bố cục',
-            onPressed: _toggleComposition,
-            icon: Icon(
-              Icons.center_focus_strong,
-              color: _compositionPhase != _CompositionPhase.off
-                  ? Colors.amber
-                  : Colors.white,
-            ),
           ),
-          IconButton(
+          _toolButton(
+            icon: Icons.auto_awesome,
+            active: _suggesting,
+            loading: _suggesting,
+            onTap: _suggestFilter,
             tooltip: 'AI gợi ý filter',
-            onPressed: _suggestFilter,
-            icon: _suggesting
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.amber,
-                    ),
-                  )
-                : const Icon(Icons.auto_awesome, color: Colors.white),
           ),
-          IconButton(
-            onPressed: _flipCamera,
-            icon: const Icon(Icons.cameraswitch_outlined, color: Colors.white),
+          _toolButton(
+            icon: Icons.cameraswitch_outlined,
+            active: false,
+            onTap: _flipCamera,
+            tooltip: 'Đổi camera',
           ),
         ],
       ),
     );
   }
 
+  /// Nút công cụ trên thanh trên: sáng đồng khi bật, tô nền đồng nhạt.
+  Widget _toolButton({
+    required IconData icon,
+    required bool active,
+    required VoidCallback onTap,
+    String? tooltip,
+    bool loading = false,
+  }) {
+    final button = InkResponse(
+      onTap: onTap,
+      radius: 26,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        width: 40,
+        height: 40,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: active
+              ? DokaColors.brass.withValues(alpha: 0.18)
+              : Colors.transparent,
+        ),
+        child: loading
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: DokaColors.brass,
+                ),
+              )
+            : Icon(
+                icon,
+                size: 22,
+                color: active ? DokaColors.brass : DokaColors.ink,
+              ),
+      ),
+    );
+    return tooltip == null ? button : Tooltip(message: tooltip, child: button);
+  }
+
   Widget _buildViewfinder() {
-    return AspectRatio(
-      aspectRatio: _aspect.ratio,
-      child: ClipRect(
-        child: LayoutBuilder(
-          builder: (context, constraints) => GestureDetector(
-            onLongPressStart: (details) => _onViewfinderLongPress(
-              details.localPosition,
-              constraints.biggest,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: DokaSpacing.md),
+      child: AspectRatio(
+        aspectRatio: _aspect.ratio,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(DokaRadius.card),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(DokaRadius.card),
+            child: LayoutBuilder(
+              builder: (context, constraints) => GestureDetector(
+                onLongPressStart: (details) => _onViewfinderLongPress(
+                  details.localPosition,
+                  constraints.biggest,
+                ),
+                child: _buildViewfinderStack(),
+              ),
             ),
-            child: _buildViewfinderStack(),
           ),
         ),
       ),
@@ -834,16 +904,10 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
                 !_cloudResolved)
               Positioned(
                 top: 14,
-                left: 0,
-                right: 0,
+                left: 12,
+                right: 12,
                 child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.black54,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
+                  child: _infoPill(
                     child: const Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -852,14 +916,14 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
                           height: 13,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            color: Colors.white,
+                            color: DokaColors.brass,
                           ),
                         ),
                         SizedBox(width: 9),
                         Text(
                           'AI đang phân tích — giữ yên máy…',
-                          style:
-                              TextStyle(color: Colors.white, fontSize: 12.5),
+                          style: TextStyle(
+                              color: DokaColors.ink, fontSize: 12.5),
                         ),
                       ],
                     ),
@@ -874,19 +938,14 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
                 left: 12,
                 right: 12,
                 child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.black54,
-                      borderRadius: BorderRadius.circular(20),
-                    ),
+                  child: _infoPill(
                     child: Text(
                       _scenicTarget != null
                           ? 'Điểm cảnh đẹp nhất đây — hướng máy vào chủ thể để được dẫn ngắm.'
                           : 'Ngoại tuyến — dùng lưới 1/3. Hướng máy vào chủ thể để dẫn ngắm.',
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.white, fontSize: 12.5),
+                      style: const TextStyle(
+                          color: DokaColors.ink, fontSize: 12.5, height: 1.35),
                     ),
                   ),
                 ),
@@ -907,32 +966,28 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
                 left: 0,
                 right: 0,
                 child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 7),
-                    decoration: BoxDecoration(
-                      color: Colors.black54,
-                      borderRadius: BorderRadius.circular(16),
-                    ),
+                  child: _infoPill(
                     child: const Text(
                       '✨ Tiến lại gần hoặc zoom thêm',
-                      style: TextStyle(color: Colors.white, fontSize: 12.5),
+                      style:
+                          TextStyle(color: DokaColors.ink, fontSize: 12.5),
                     ),
                   ),
                 ),
               ),
             if (_processing)
               Container(
-                color: Colors.black45,
+                color: Colors.black.withValues(alpha: 0.5),
                 alignment: Alignment.center,
                 child: const Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    CircularProgressIndicator(color: Colors.white),
-                    SizedBox(height: 12),
+                    CircularProgressIndicator(color: DokaColors.brass),
+                    SizedBox(height: DokaSpacing.md),
                     Text(
                       'Đang tráng phim…',
-                      style: TextStyle(color: Colors.white70, fontSize: 13),
+                      style:
+                          TextStyle(color: DokaColors.ink, fontSize: 13),
                     ),
                   ],
                 ),
@@ -941,13 +996,26 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
         );
   }
 
+  /// Thẻ thông tin nhỏ nổi trên khung ngắm — nền kính mờ, viền mảnh.
+  Widget _infoPill({required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+      decoration: BoxDecoration(
+        color: DokaColors.glass(0.55),
+        borderRadius: BorderRadius.circular(DokaRadius.chip),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+      ),
+      child: child,
+    );
+  }
+
   Widget _buildCameraCover() {
     final controller = _controller;
     if (controller == null || !controller.value.isInitialized) {
       return const ColoredBox(
-        color: Colors.black,
+        color: DokaColors.body,
         child: Center(
-          child: CircularProgressIndicator(color: Colors.white24),
+          child: CircularProgressIndicator(color: DokaColors.brassDeep),
         ),
       );
     }
@@ -966,11 +1034,13 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
 
   Widget _buildBeautySlider() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
+      padding: const EdgeInsets.fromLTRB(
+          DokaSpacing.xl, 0, DokaSpacing.lg, DokaSpacing.sm),
       child: Row(
         children: [
           const Icon(Icons.face_retouching_natural,
-              color: Colors.white54, size: 18),
+              color: DokaColors.brass, size: 18),
+          const SizedBox(width: DokaSpacing.sm),
           Expanded(
             child: Slider(
               value: _beauty,
@@ -978,10 +1048,11 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
             ),
           ),
           SizedBox(
-            width: 34,
+            width: 40,
             child: Text(
               '${(_beauty * 100).round()}',
-              style: const TextStyle(color: Colors.white70, fontSize: 12),
+              style: DokaType.meter.copyWith(
+                  fontSize: 12, color: DokaColors.inkMuted),
               textAlign: TextAlign.right,
             ),
           ),
@@ -992,38 +1063,81 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
 
   Widget _buildBottomBar() {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 36),
+      padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 32),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          IconButton(
-            iconSize: 30,
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const GalleryScreen()),
+          _buildGalleryButton(),
+          _buildShutterButton(),
+          // Cân đối với nút thư viện bên trái.
+          const SizedBox(width: 52),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGalleryButton() {
+    return GestureDetector(
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const GalleryScreen()),
+      ),
+      child: Container(
+        width: 52,
+        height: 52,
+        decoration: BoxDecoration(
+          color: DokaColors.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+        ),
+        child: const Icon(Icons.photo_library_outlined,
+            color: DokaColors.ink, size: 24),
+      ),
+    );
+  }
+
+  /// Nút chụp kiểu cò máy phim: vòng đồng ánh kim, đĩa nhả màu kem.
+  Widget _buildShutterButton() {
+    return GestureDetector(
+      onTap: _capture,
+      child: AnimatedScale(
+        duration: const Duration(milliseconds: 120),
+        scale: _processing ? 0.94 : 1,
+        child: Container(
+          width: 78,
+          height: 78,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [DokaColors.brass, DokaColors.brassDeep],
             ),
-            icon: const Icon(Icons.photo_library_outlined,
-                color: Colors.white),
-          ),
-          GestureDetector(
-            onTap: _capture,
-            child: Container(
-              width: 72,
-              height: 72,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white, width: 4),
+            boxShadow: [
+              BoxShadow(
+                color: DokaColors.brass.withValues(alpha: 0.30),
+                blurRadius: 16,
+                spreadRadius: 1,
               ),
-              padding: const EdgeInsets.all(5),
+            ],
+          ),
+          padding: const EdgeInsets.all(4),
+          // Khe tối giữa vòng đồng và đĩa nhả.
+          child: DecoratedBox(
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: DokaColors.body,
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(3.5),
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: _processing ? Colors.white38 : Colors.white,
+                  color: _processing ? DokaColors.inkMuted : DokaColors.ink,
                 ),
               ),
             ),
           ),
-          const SizedBox(width: 46),
-        ],
+        ),
       ),
     );
   }

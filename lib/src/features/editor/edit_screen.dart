@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/theme.dart';
 import '../../providers.dart';
 import '../filters/film_preset.dart';
 import '../filters/image_renderer.dart';
@@ -20,6 +21,23 @@ class _Adjustment {
   final double min;
   final double max;
   final double neutral;
+}
+
+/// Chấm đồng nhỏ báo thông số đã bị chỉnh khỏi mặc định.
+class _ChangedDot extends StatelessWidget {
+  const _ChangedDot();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 6,
+      height: 6,
+      decoration: const BoxDecoration(
+        shape: BoxShape.circle,
+        color: DokaColors.brass,
+      ),
+    );
+  }
 }
 
 const _adjustments = <_Adjustment>[
@@ -162,11 +180,12 @@ class _EditScreenState extends ConsumerState<EditScreen> {
   Widget build(BuildContext context) {
     final adjustment = _adjustments[_selected];
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: DokaColors.body,
       appBar: AppBar(
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        title: const Text('Chỉnh ảnh'),
+        backgroundColor: DokaColors.body,
+        foregroundColor: DokaColors.ink,
+        elevation: 0,
+        title: const Text('Chỉnh ảnh', style: DokaType.title),
         actions: [
           if (_saving)
             const Padding(
@@ -176,12 +195,16 @@ class _EditScreenState extends ConsumerState<EditScreen> {
                 height: 20,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  color: Colors.white,
+                  color: DokaColors.brass,
                 ),
               ),
             )
           else
-            IconButton(onPressed: _save, icon: const Icon(Icons.check)),
+            IconButton(
+              onPressed: _save,
+              tooltip: 'Lưu ảnh mới',
+              icon: const Icon(Icons.check, color: DokaColors.brass),
+            ),
         ],
       ),
       body: Column(
@@ -189,38 +212,62 @@ class _EditScreenState extends ConsumerState<EditScreen> {
           Expanded(
             child: _rendered == null
                 ? const Center(
-                    child: CircularProgressIndicator(color: Colors.white24),
+                    child:
+                        CircularProgressIndicator(color: DokaColors.brassDeep),
                   )
-                : RawImage(image: _rendered, fit: BoxFit.contain),
+                : Padding(
+                    padding: const EdgeInsets.all(DokaSpacing.md),
+                    child: RawImage(image: _rendered, fit: BoxFit.contain),
+                  ),
           ),
           SizedBox(
-            height: 44,
+            height: 46,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.symmetric(horizontal: DokaSpacing.lg),
               itemCount: _adjustments.length,
-              separatorBuilder: (_, _) => const SizedBox(width: 8),
+              separatorBuilder: (_, _) => const SizedBox(width: DokaSpacing.sm),
               itemBuilder: (context, index) {
                 final selected = index == _selected;
                 final changed =
                     _values[index] != _adjustments[index].neutral;
                 return GestureDetector(
                   onTap: () => setState(() => _selected = index),
-                  child: Container(
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 160),
                     padding: const EdgeInsets.symmetric(horizontal: 14),
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                      color: selected ? Colors.white : Colors.white10,
-                      borderRadius: BorderRadius.circular(22),
-                    ),
-                    child: Text(
-                      changed
-                          ? '${_adjustments[index].label} •'
-                          : _adjustments[index].label,
-                      style: TextStyle(
-                        color: selected ? Colors.black : Colors.white70,
-                        fontSize: 13,
+                      color: selected
+                          ? DokaColors.brass.withValues(alpha: 0.16)
+                          : DokaColors.surface,
+                      borderRadius: BorderRadius.circular(DokaRadius.chip),
+                      border: Border.all(
+                        color: selected
+                            ? DokaColors.brass.withValues(alpha: 0.9)
+                            : Colors.white.withValues(alpha: 0.06),
+                        width: selected ? 1.2 : 1,
                       ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _adjustments[index].label,
+                          style: DokaType.chip.copyWith(
+                            color: selected
+                                ? DokaColors.ink
+                                : DokaColors.inkMuted,
+                            fontWeight: selected
+                                ? FontWeight.w600
+                                : FontWeight.w500,
+                          ),
+                        ),
+                        if (changed) ...[
+                          const SizedBox(width: 6),
+                          const _ChangedDot(),
+                        ],
+                      ],
                     ),
                   ),
                 );
@@ -228,7 +275,8 @@ class _EditScreenState extends ConsumerState<EditScreen> {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 4, 16),
+            padding: const EdgeInsets.fromLTRB(
+                DokaSpacing.lg, DokaSpacing.xs, DokaSpacing.sm, DokaSpacing.lg),
             child: Row(
               children: [
                 Expanded(
@@ -252,7 +300,7 @@ class _EditScreenState extends ConsumerState<EditScreen> {
                     });
                     _rerender();
                   },
-                  icon: const Icon(Icons.refresh, color: Colors.white70),
+                  icon: const Icon(Icons.refresh, color: DokaColors.inkMuted),
                 ),
               ],
             ),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
 import '../../../core/geometry.dart';
+import '../../../core/theme.dart';
 
 /// Vạch cân bằng đường chân trời: xoay theo độ nghiêng của máy,
 /// chuyển xanh khi máy thẳng (±2°).
@@ -27,7 +28,7 @@ class LevelIndicator extends StatelessWidget {
                 duration: const Duration(milliseconds: 120),
                 width: level ? 140 : 110,
                 height: 1.6,
-                color: level ? Colors.greenAccent : Colors.white54,
+                color: level ? DokaColors.level : Colors.white54,
               ),
             ),
           );
