@@ -45,7 +45,8 @@ Trả về các trường:
 - cropX, cropY, cropW, cropH: vùng CROP đẹp nhất trên ảnh (khung hình lý tưởng), số thực 0..1, gốc 0,0 ở góc trên-trái; cropX+cropW ≤ 1, cropY+cropH ≤ 1.
 - advice: lời khuyên bố cục chi tiết bằng tiếng Việt, tối đa 30 từ, kiểu "Ảnh dọc, chủ thể là X, bố cục căn giữa + khoảng trống, nén bớt trời và đất".
 - tips: tối đa 3 mẹo bố cục ngắn gọn bằng tiếng Việt.
-''';
+
+QUAN TRỌNG về toạ độ: mọi toạ độ (targetX/Y, scenicX/Y, cropX/Y/W/H) PHẢI nằm trong [0,1] và trỏ vào chi tiết THỰC SỰ NHÌN THẤY trong đúng bức ảnh này — không suy đoán ra ngoài khung. Điểm scenic phải là một vị trí có thật trong ảnh (không phải mép/góc trống). Nếu ảnh không có điểm nhấn rõ ràng, cứ bỏ trống scenicX/scenicY thay vì đoán bừa.''';
 }
 
 /// Parse JSON trả về (đã decode) thành SceneAnalysis. Thuần, không mạng.
