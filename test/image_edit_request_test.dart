@@ -4,13 +4,16 @@ import 'package:doka_app/src/features/editor/ai/image_edit_request.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('request body có prompt + ảnh inline, KHÔNG có responseSchema', () {
+  test('request body có prompt + ảnh inline + responseModalities, KHÔNG có responseSchema', () {
     final body = buildImageEditRequestBody(base64Image: 'AAAA', prompt: 'remove background');
     final parts = (body['contents'] as List).first['parts'] as List;
     expect(parts[0]['text'], 'remove background');
     expect(parts[1]['inline_data']['mime_type'], 'image/jpeg');
     expect(parts[1]['inline_data']['data'], 'AAAA');
-    expect(body.containsKey('generationConfig'), isFalse);
+    final genConfig = body['generationConfig'] as Map<String, dynamic>;
+    expect(genConfig['responseModalities'], ['TEXT', 'IMAGE']);
+    expect(genConfig.containsKey('responseSchema'), isFalse);
+    expect(genConfig.containsKey('responseMimeType'), isFalse);
   });
 
   test('parse ảnh từ inlineData (camelCase) → đúng bytes', () {

@@ -23,6 +23,11 @@ Map<String, dynamic> buildImageEditRequestBody({
         ],
       },
     ],
+    // Model ảnh cần khai báo modality đầu ra; thiếu nó một số endpoint trả về
+    // text-only. KHÔNG dùng responseSchema/responseMimeType (đó là cho JSON).
+    'generationConfig': {
+      'responseModalities': ['TEXT', 'IMAGE'],
+    },
   };
 }
 
