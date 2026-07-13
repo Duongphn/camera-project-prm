@@ -13,6 +13,10 @@ import '../filters/film_preset.dart';
 import '../filters/image_renderer.dart';
 import '../filters/photo_encoder.dart';
 import '../filters/photo_processor.dart';
+import 'ai/quick_edits.dart';
+
+/// Chế độ chỉnh: thông số shader on-device, hoặc chỉnh tạo sinh bằng Gemini.
+enum _EditMode { manual, ai }
 
 /// Một thông số chỉnh được trong editor.
 class _Adjustment {
@@ -86,6 +90,13 @@ class _EditScreenState extends ConsumerState<EditScreen> {
   bool _dirty = false;
   bool _saving = false;
 
+  // Trạng thái tab AI.
+  _EditMode _mode = _EditMode.manual;
+  final _promptController = TextEditingController();
+  bool _aiBusy = false;
+  int _aiRequestId = 0; // token vô hiệu request khi người dùng huỷ
+  ui.Image? _aiPreview; // ảnh AI đang xem trước (chưa "Dùng")
+
   @override
   void initState() {
     super.initState();
@@ -97,6 +108,8 @@ class _EditScreenState extends ConsumerState<EditScreen> {
     _source?.dispose();
     _previewBase?.dispose();
     _rendered?.dispose();
+    _aiPreview?.dispose();
+    _promptController.dispose();
     super.dispose();
   }
 
@@ -114,17 +127,22 @@ class _EditScreenState extends ConsumerState<EditScreen> {
 
   Future<void> _load() async {
     final bytes = await widget.file.readAsBytes();
-    final codec = await ui.instantiateImageCodec(bytes);
-    final frame = await codec.getNextFrame();
-    codec.dispose();
+    final image = await _decodeImage(bytes);
     if (!mounted) {
-      frame.image.dispose();
+      image.dispose();
       return;
     }
-    _source = frame.image;
+    _source = image;
     _previewBase = await ImageRenderer.downscale(_source!, 1080);
     if (!mounted) return;
     await _rerender();
+  }
+
+  Future<ui.Image> _decodeImage(Uint8List bytes) async {
+    final codec = await ui.instantiateImageCodec(bytes);
+    final frame = await codec.getNextFrame();
+    codec.dispose();
+    return frame.image;
   }
 
   Future<void> _rerender() async {
@@ -189,6 +207,83 @@ class _EditScreenState extends ConsumerState<EditScreen> {
     }
   }
 
+  /// Mã hoá ảnh nguồn hiện tại thành JPEG để gửi Gemini.
+  Future<Uint8List> _sourceToJpeg(ui.Image image) async {
+    final raw = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+    if (raw == null) {
+      throw StateError('Không đọc được dữ liệu ảnh nguồn.');
+    }
+    return _encodeJpegInIsolate(
+      raw.buffer.asUint8List(),
+      image.width,
+      image.height,
+    );
+  }
+
+  Future<void> _runAiEdit(String prompt) async {
+    final source = _source;
+    if (source == null || _aiBusy || prompt.trim().isEmpty) return;
+    setState(() => _aiBusy = true);
+    final requestId = ++_aiRequestId;
+    try {
+      final jpeg = await _sourceToJpeg(source);
+      final bytes = await ref
+          .read(geminiImageEditorProvider)
+          .editImage(jpegBytes: jpeg, prompt: prompt);
+      if (!mounted || requestId != _aiRequestId) return; // đã huỷ
+      final preview = await _decodeImage(bytes);
+      if (!mounted || requestId != _aiRequestId) {
+        preview.dispose();
+        return;
+      }
+      setState(() {
+        _aiPreview?.dispose();
+        _aiPreview = preview;
+      });
+    } catch (e) {
+      if (mounted && requestId == _aiRequestId) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Chỉnh AI thất bại: $e')));
+      }
+    } finally {
+      if (mounted && requestId == _aiRequestId) {
+        setState(() => _aiBusy = false);
+      }
+    }
+  }
+
+  void _cancelAi() {
+    _aiRequestId++; // vô hiệu request đang chờ
+    setState(() => _aiBusy = false);
+  }
+
+  void _discardAi() {
+    setState(() {
+      _aiPreview?.dispose();
+      _aiPreview = null;
+    });
+  }
+
+  Future<void> _applyAiResult() async {
+    final preview = _aiPreview;
+    if (preview == null) return;
+    final oldSource = _source;
+    final oldPreviewBase = _previewBase;
+    _source = preview; // ảnh AI thành nền mới
+    _aiPreview = null;
+    _previewBase = await ImageRenderer.downscale(_source!, 1080);
+    for (var i = 0; i < _values.length; i++) {
+      _values[i] = _adjustments[i].neutral;
+    }
+    if (!mounted) {
+      return;
+    }
+    oldSource?.dispose();
+    oldPreviewBase?.dispose();
+    setState(() => _mode = _EditMode.manual);
+    await _rerender();
+  }
+
   @override
   Widget build(BuildContext context) {
     final adjustment = _adjustments[_selected];
@@ -222,101 +317,293 @@ class _EditScreenState extends ConsumerState<EditScreen> {
       ),
       body: Column(
         children: [
-          Expanded(
-            child: _rendered == null
-                ? const Center(
-                    child:
-                        CircularProgressIndicator(color: DokaColors.brassDeep),
-                  )
-                : Padding(
-                    padding: const EdgeInsets.all(DokaSpacing.md),
-                    child: RawImage(image: _rendered, fit: BoxFit.contain),
-                  ),
+          Expanded(child: _imageArea()),
+          if (_aiPreview != null)
+            _aiPreviewActions()
+          else ...[
+            _modeToggle(),
+            if (_mode == _EditMode.manual)
+              ..._manualControls(adjustment)
+            else
+              _aiPanel(),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _imageArea() {
+    final preview = _aiPreview;
+    final Widget content;
+    if (preview != null) {
+      content = Padding(
+        padding: const EdgeInsets.all(DokaSpacing.md),
+        child: RawImage(image: preview, fit: BoxFit.contain),
+      );
+    } else if (_rendered == null) {
+      content = const Center(
+        child: CircularProgressIndicator(color: DokaColors.brassDeep),
+      );
+    } else {
+      content = Padding(
+        padding: const EdgeInsets.all(DokaSpacing.md),
+        child: RawImage(image: _rendered, fit: BoxFit.contain),
+      );
+    }
+    return Stack(
+      children: [
+        Positioned.fill(child: content),
+        if (_aiBusy)
+          Positioned.fill(
+            child: ColoredBox(
+              color: Colors.black54,
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(color: DokaColors.brass),
+                    const SizedBox(height: DokaSpacing.md),
+                    Text('Đang xử lý AI…',
+                        style: DokaType.chip.copyWith(color: DokaColors.ink)),
+                    const SizedBox(height: DokaSpacing.md),
+                    TextButton(onPressed: _cancelAi, child: const Text('Huỷ')),
+                  ],
+                ),
+              ),
+            ),
           ),
-          SizedBox(
-            height: 46,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: DokaSpacing.lg),
-              itemCount: _adjustments.length,
-              separatorBuilder: (_, _) => const SizedBox(width: DokaSpacing.sm),
-              itemBuilder: (context, index) {
-                final selected = index == _selected;
-                final changed =
-                    _values[index] != _adjustments[index].neutral;
-                return GestureDetector(
-                  onTap: () => setState(() => _selected = index),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 160),
-                    padding: const EdgeInsets.symmetric(horizontal: 14),
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      color: selected
-                          ? DokaColors.brass.withValues(alpha: 0.16)
-                          : DokaColors.surface,
-                      borderRadius: BorderRadius.circular(DokaRadius.chip),
-                      border: Border.all(
-                        color: selected
-                            ? DokaColors.brass.withValues(alpha: 0.9)
-                            : Colors.white.withValues(alpha: 0.06),
-                        width: selected ? 1.2 : 1,
+      ],
+    );
+  }
+
+  Widget _aiPreviewActions() {
+    return Padding(
+      padding: const EdgeInsets.all(DokaSpacing.lg),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'Ảnh AI có độ phân giải thấp hơn ảnh gốc.',
+            style: DokaType.chip.copyWith(color: DokaColors.inkMuted),
+          ),
+          const SizedBox(height: DokaSpacing.md),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: _discardAi,
+                  child: const Text('Huỷ'),
+                ),
+              ),
+              const SizedBox(width: DokaSpacing.md),
+              Expanded(
+                child: FilledButton(
+                  onPressed: _applyAiResult,
+                  child: const Text('Dùng'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _modeToggle() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        horizontal: DokaSpacing.lg,
+        vertical: DokaSpacing.xs,
+      ),
+      child: Row(
+        children: [
+          _modeTab('Chỉnh tay', _EditMode.manual),
+          const SizedBox(width: DokaSpacing.sm),
+          _modeTab('AI', _EditMode.ai),
+        ],
+      ),
+    );
+  }
+
+  Widget _modeTab(String label, _EditMode mode) {
+    final selected = _mode == mode;
+    return GestureDetector(
+      onTap: () => setState(() => _mode = mode),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: selected
+              ? DokaColors.brass.withValues(alpha: 0.16)
+              : DokaColors.surface,
+          borderRadius: BorderRadius.circular(DokaRadius.chip),
+          border: Border.all(
+            color: selected
+                ? DokaColors.brass.withValues(alpha: 0.9)
+                : Colors.white.withValues(alpha: 0.06),
+            width: selected ? 1.2 : 1,
+          ),
+        ),
+        child: Text(
+          label,
+          style: DokaType.chip.copyWith(
+            color: selected ? DokaColors.ink : DokaColors.inkMuted,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _manualControls(_Adjustment adjustment) {
+    return [
+      SizedBox(
+        height: 46,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: DokaSpacing.lg),
+          itemCount: _adjustments.length,
+          separatorBuilder: (_, _) => const SizedBox(width: DokaSpacing.sm),
+          itemBuilder: (context, index) {
+            final selected = index == _selected;
+            final changed = _values[index] != _adjustments[index].neutral;
+            return GestureDetector(
+              onTap: () => setState(() => _selected = index),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: selected
+                      ? DokaColors.brass.withValues(alpha: 0.16)
+                      : DokaColors.surface,
+                  borderRadius: BorderRadius.circular(DokaRadius.chip),
+                  border: Border.all(
+                    color: selected
+                        ? DokaColors.brass.withValues(alpha: 0.9)
+                        : Colors.white.withValues(alpha: 0.06),
+                    width: selected ? 1.2 : 1,
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _adjustments[index].label,
+                      style: DokaType.chip.copyWith(
+                        color: selected ? DokaColors.ink : DokaColors.inkMuted,
+                        fontWeight:
+                            selected ? FontWeight.w600 : FontWeight.w500,
                       ),
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          _adjustments[index].label,
-                          style: DokaType.chip.copyWith(
-                            color: selected
-                                ? DokaColors.ink
-                                : DokaColors.inkMuted,
-                            fontWeight: selected
-                                ? FontWeight.w600
-                                : FontWeight.w500,
-                          ),
-                        ),
-                        if (changed) ...[
-                          const SizedBox(width: 6),
-                          const _ChangedDot(),
-                        ],
-                      ],
+                    if (changed) ...[
+                      const SizedBox(width: 6),
+                      const _ChangedDot(),
+                    ],
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(
+            DokaSpacing.lg, DokaSpacing.xs, DokaSpacing.sm, DokaSpacing.lg),
+        child: Row(
+          children: [
+            Expanded(
+              child: Slider(
+                value: _values[_selected],
+                min: adjustment.min,
+                max: adjustment.max,
+                onChanged: (v) {
+                  setState(() => _values[_selected] = v);
+                  _rerender();
+                },
+              ),
+            ),
+            IconButton(
+              tooltip: 'Đặt lại tất cả',
+              onPressed: () {
+                setState(() {
+                  for (var i = 0; i < _values.length; i++) {
+                    _values[i] = _adjustments[i].neutral;
+                  }
+                });
+                _rerender();
+              },
+              icon: const Icon(Icons.refresh, color: DokaColors.inkMuted),
+            ),
+          ],
+        ),
+      ),
+    ];
+  }
+
+  Widget _aiPanel() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+          DokaSpacing.lg, DokaSpacing.xs, DokaSpacing.lg, DokaSpacing.lg),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Wrap(
+            spacing: DokaSpacing.sm,
+            runSpacing: DokaSpacing.sm,
+            children: [
+              for (final q in quickEdits)
+                GestureDetector(
+                  onTap: _aiBusy ? null : () => _runAiEdit(q.prompt),
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: DokaColors.surface,
+                      borderRadius: BorderRadius.circular(DokaRadius.chip),
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.06),
+                      ),
+                    ),
+                    child: Text(
+                      q.label,
+                      style: DokaType.chip.copyWith(color: DokaColors.ink),
                     ),
                   ),
-                );
-              },
-            ),
+                ),
+            ],
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-                DokaSpacing.lg, DokaSpacing.xs, DokaSpacing.sm, DokaSpacing.lg),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Slider(
-                    value: _values[_selected],
-                    min: adjustment.min,
-                    max: adjustment.max,
-                    onChanged: (v) {
-                      setState(() => _values[_selected] = v);
-                      _rerender();
-                    },
+          const SizedBox(height: DokaSpacing.md),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _promptController,
+                  enabled: !_aiBusy,
+                  style: DokaType.chip.copyWith(color: DokaColors.ink),
+                  decoration: InputDecoration(
+                    hintText: 'Nhập lệnh chỉnh sửa…',
+                    hintStyle:
+                        DokaType.chip.copyWith(color: DokaColors.inkMuted),
+                    filled: true,
+                    fillColor: DokaColors.surface,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(DokaRadius.chip),
+                      borderSide: BorderSide.none,
+                    ),
                   ),
+                  onSubmitted: _aiBusy ? null : _runAiEdit,
                 ),
-                IconButton(
-                  tooltip: 'Đặt lại tất cả',
-                  onPressed: () {
-                    setState(() {
-                      for (var i = 0; i < _values.length; i++) {
-                        _values[i] = _adjustments[i].neutral;
-                      }
-                    });
-                    _rerender();
-                  },
-                  icon: const Icon(Icons.refresh, color: DokaColors.inkMuted),
-                ),
-              ],
-            ),
+              ),
+              const SizedBox(width: DokaSpacing.sm),
+              IconButton(
+                tooltip: 'Chỉnh bằng AI',
+                onPressed:
+                    _aiBusy ? null : () => _runAiEdit(_promptController.text),
+                icon: const Icon(Icons.auto_awesome, color: DokaColors.brass),
+              ),
+            ],
           ),
         ],
       ),
