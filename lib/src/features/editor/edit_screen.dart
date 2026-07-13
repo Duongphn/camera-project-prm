@@ -94,6 +94,7 @@ class _EditScreenState extends ConsumerState<EditScreen> {
   _EditMode _mode = _EditMode.manual;
   final _promptController = TextEditingController();
   bool _aiBusy = false;
+  bool _applyingAi = false; // đang áp ảnh AI (khoá nút Dùng/Huỷ trong lúc downscale)
   int _aiRequestId = 0; // token vô hiệu request khi người dùng huỷ
   ui.Image? _aiPreview; // ảnh AI đang xem trước (chưa "Dùng")
 
@@ -266,38 +267,43 @@ class _EditScreenState extends ConsumerState<EditScreen> {
 
   Future<void> _applyAiResult() async {
     final preview = _aiPreview;
-    if (preview == null) return;
-    // Tạo bản downscale TRƯỚC khi đổi state: nếu lỗi/huỷ giữa chừng thì chưa
-    // đụng tới _source/_previewBase hiện tại.
-    final ui.Image newPreviewBase;
+    if (preview == null || _applyingAi) return;
+    setState(() => _applyingAi = true);
     try {
-      newPreviewBase = await ImageRenderer.downscale(preview, 1080);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Không dùng được ảnh AI: $e')));
+      // Tạo bản downscale TRƯỚC khi đổi state: nếu lỗi/huỷ giữa chừng thì chưa
+      // đụng tới _source/_previewBase hiện tại.
+      final ui.Image newPreviewBase;
+      try {
+        newPreviewBase = await ImageRenderer.downscale(preview, 1080);
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Không dùng được ảnh AI: $e')));
+        }
+        return;
       }
-      return;
+      if (!mounted) {
+        // Widget đã huỷ trong lúc downscale: dispose() đã lo _aiPreview (=preview);
+        // chỉ cần bỏ ảnh vừa tạo, chưa gắn vào field nào.
+        newPreviewBase.dispose();
+        return;
+      }
+      // Từ đây tới lúc swap KHÔNG còn await → dispose() không thể chen vào giữa.
+      final oldSource = _source;
+      final oldPreviewBase = _previewBase;
+      _source = preview; // ảnh AI thành nền mới
+      _previewBase = newPreviewBase;
+      _aiPreview = null; // quyền sở hữu preview đã chuyển sang _source
+      for (var i = 0; i < _values.length; i++) {
+        _values[i] = _adjustments[i].neutral;
+      }
+      oldSource?.dispose();
+      oldPreviewBase?.dispose();
+      setState(() => _mode = _EditMode.manual);
+      await _rerender();
+    } finally {
+      if (mounted) setState(() => _applyingAi = false);
     }
-    if (!mounted) {
-      // Widget đã huỷ trong lúc downscale: dispose() đã lo _aiPreview (=preview);
-      // chỉ cần bỏ ảnh vừa tạo, chưa gắn vào field nào.
-      newPreviewBase.dispose();
-      return;
-    }
-    // Từ đây tới lúc swap KHÔNG còn await → dispose() không thể chen vào giữa.
-    final oldSource = _source;
-    final oldPreviewBase = _previewBase;
-    _source = preview; // ảnh AI thành nền mới
-    _previewBase = newPreviewBase;
-    _aiPreview = null; // quyền sở hữu preview đã chuyển sang _source
-    for (var i = 0; i < _values.length; i++) {
-      _values[i] = _adjustments[i].neutral;
-    }
-    oldSource?.dispose();
-    oldPreviewBase?.dispose();
-    setState(() => _mode = _EditMode.manual);
-    await _rerender();
   }
 
   @override
@@ -407,14 +413,14 @@ class _EditScreenState extends ConsumerState<EditScreen> {
             children: [
               Expanded(
                 child: OutlinedButton(
-                  onPressed: _discardAi,
+                  onPressed: _applyingAi ? null : _discardAi,
                   child: const Text('Huỷ'),
                 ),
               ),
               const SizedBox(width: DokaSpacing.md),
               Expanded(
                 child: FilledButton(
-                  onPressed: _applyAiResult,
+                  onPressed: _applyingAi ? null : _applyAiResult,
                   child: const Text('Dùng'),
                 ),
               ),
