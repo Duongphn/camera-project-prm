@@ -5,7 +5,6 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image/image.dart' as img;
 
 import '../../core/theme.dart';
 import '../../providers.dart';
@@ -14,6 +13,7 @@ import '../composition/composition_advisor.dart';
 import '../composition/composition_overlay.dart';
 import '../composition/frame_guide_overlay.dart';
 import '../composition/subject_detector.dart';
+import '../composition/viewfinder_crop.dart';
 import '../composition/zoom_advisor.dart';
 import '../filters/film_preset.dart';
 import '../filters/photo_processor.dart';
@@ -301,6 +301,11 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
     }
   }
 
+  /// Điểm có nằm trong khung ngắm không (0..1). Dùng để loại điểm Gemini trỏ
+  /// ra ngoài phần nhìn thấy thay vì kẹp dí vào mép.
+  bool _pointInView(Offset o) =>
+      o.dx >= 0 && o.dx <= 1 && o.dy >= 0 && o.dy <= 1;
+
   /// Chụp 1 ảnh tĩnh, hỏi Gemini điểm bố cục đẹp nhất. Tạm dừng stream khi
   /// chụp rồi bật lại. Lỗi/offline → giữ _cloudTarget null (fallback hình học).
   Future<void> _runCloudCompositionAnalysis() async {
@@ -318,74 +323,87 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       await _pauseCompositionStream();
       final shot = await controller.takePicture();
       final bytes = await shot.readAsBytes();
+      // (1) Cắt ảnh khớp khung ngắm TRƯỚC khi gửi: Gemini chỉ thấy đúng phần
+      // người dùng thấy → toạ độ 0..1 khớp 1:1 với khung, không "nhảy ra ngoài".
+      final framed = frameToViewfinder(bytes, _aspect.ratio);
       final analysis = await ref
           .read(sceneAnalyzerProvider)
-          .analyze(jpegBytes: bytes, filePath: shot.path);
+          .analyze(jpegBytes: framed?.jpeg ?? bytes, filePath: shot.path);
       if (token != _compositionAnalyzeToken) return; // đã bị lần mới thay
 
       final camera = _cameras[_cameraIndex];
       final mirror = camera.lensDirection == CameraLensDirection.front;
-      if (analysis.targetPoint != null ||
-          analysis.cropRect != null ||
-          analysis.scenicPoint != null) {
-        final decoded = img.decodeImage(bytes);
-        if (decoded != null) {
-          final upright = img.bakeOrientation(decoded);
-          final imageSize =
-              Size(upright.width.toDouble(), upright.height.toDouble());
-          final rawScenic = analysis.scenicPoint;
-          if (rawScenic != null) {
-            final mapped = mapImagePointToView(
-              point: rawScenic,
-              imageSize: imageSize,
-              viewAspect: _aspect.ratio,
-              mirrorX: mirror,
-            );
-            _scenicTarget = Offset(
-              mapped.dx.clamp(0.0, 1.0),
-              mapped.dy.clamp(0.0, 1.0),
-            );
+      var droppedOutOfView = false;
+      if (framed != null &&
+          (analysis.targetPoint != null ||
+              analysis.cropRect != null ||
+              analysis.scenicPoint != null)) {
+        // Ảnh đã khớp tỉ lệ khung → map là ánh xạ 1:1 (chỉ soi gương camera trước).
+        final imageSize = framed.size;
+        final rawScenic = analysis.scenicPoint;
+        if (rawScenic != null) {
+          final mapped = mapImagePointToView(
+            point: rawScenic,
+            imageSize: imageSize,
+            viewAspect: _aspect.ratio,
+            mirrorX: mirror,
+          );
+          // (2) Kiểm tra thay vì kẹp: điểm ngoài khung thì bỏ, không dí vào mép.
+          if (_pointInView(mapped)) {
+            _scenicTarget = mapped;
+          } else {
+            droppedOutOfView = true;
           }
-          final rawTarget = analysis.targetPoint;
-          if (rawTarget != null) {
-            final mapped = mapImagePointToView(
-              point: rawTarget,
-              imageSize: imageSize,
-              viewAspect: _aspect.ratio,
-              mirrorX: mirror,
-            );
-            _cloudTarget = Offset(
-              mapped.dx.clamp(0.0, 1.0),
-              mapped.dy.clamp(0.0, 1.0),
-            );
-          }
-          final crop = analysis.cropRect;
-          if (crop != null) {
-            final mapped = mapImageRectToView(
-              rect: Rect.fromLTWH(
-                crop.left * imageSize.width,
-                crop.top * imageSize.height,
-                crop.width * imageSize.width,
-                crop.height * imageSize.height,
-              ),
-              imageSize: imageSize,
-              viewAspect: _aspect.ratio,
-              mirrorX: mirror,
-            );
-            final clamped = Rect.fromLTRB(
-              mapped.left.clamp(0.0, 1.0),
-              mapped.top.clamp(0.0, 1.0),
-              mapped.right.clamp(0.0, 1.0),
-              mapped.bottom.clamp(0.0, 1.0),
-            );
-            // Crop quá bé sau clamp = vùng đề xuất nằm ngoài phần nhìn thấy.
-            if (clamped.width > 0.05 && clamped.height > 0.05) {
-              _cloudCrop = clamped;
-            }
-          }
-          // Không có điểm ngắm riêng → ngắm vào tâm vùng crop.
-          _cloudTarget ??= _cloudCrop?.center;
         }
+        final rawTarget = analysis.targetPoint;
+        if (rawTarget != null) {
+          final mapped = mapImagePointToView(
+            point: rawTarget,
+            imageSize: imageSize,
+            viewAspect: _aspect.ratio,
+            mirrorX: mirror,
+          );
+          if (_pointInView(mapped)) {
+            _cloudTarget = mapped;
+          } else {
+            droppedOutOfView = true;
+          }
+        }
+        final crop = analysis.cropRect;
+        if (crop != null) {
+          final mapped = mapImageRectToView(
+            rect: Rect.fromLTWH(
+              crop.left * imageSize.width,
+              crop.top * imageSize.height,
+              crop.width * imageSize.width,
+              crop.height * imageSize.height,
+            ),
+            imageSize: imageSize,
+            viewAspect: _aspect.ratio,
+            mirrorX: mirror,
+          );
+          final clamped = Rect.fromLTRB(
+            mapped.left.clamp(0.0, 1.0),
+            mapped.top.clamp(0.0, 1.0),
+            mapped.right.clamp(0.0, 1.0),
+            mapped.bottom.clamp(0.0, 1.0),
+          );
+          // Crop quá bé sau clamp = vùng đề xuất nằm ngoài phần nhìn thấy.
+          if (clamped.width > 0.05 && clamped.height > 0.05) {
+            _cloudCrop = clamped;
+          }
+        }
+        // Không có điểm ngắm riêng → ngắm vào tâm vùng crop.
+        _cloudTarget ??= _cloudCrop?.center;
+      }
+      // (2) Gemini có gợi ý nhưng điểm rơi ngoài khung và không còn gì dùng
+      // được → báo cho người dùng thay vì vẽ lung tung.
+      if (droppedOutOfView &&
+          _scenicTarget == null &&
+          _cloudTarget == null &&
+          _cloudCrop == null &&
+          mounted) {
+        _showMessage('Điểm đẹp nằm ngoài khung — thử lại hoặc đổi góc máy.');
       }
       _cloudTips = analysis.tips;
       _cloudAdvice = analysis.advice;
