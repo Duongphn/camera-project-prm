@@ -18,6 +18,7 @@ import '../composition/zoom_advisor.dart';
 import '../filters/film_preset.dart';
 import '../filters/photo_processor.dart';
 import '../gallery/gallery_screen.dart';
+import 'camera_lifecycle.dart';
 import 'capture_aspect.dart';
 import 'widgets/ai_toast_card.dart';
 import 'widgets/analyzing_sparkle_overlay.dart';
@@ -93,14 +94,21 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final controller = _controller;
-    if (controller == null || !controller.value.isInitialized) return;
-    if (state == AppLifecycleState.inactive) {
-      _controller = null;
-      controller.dispose();
-      if (mounted) setState(() {});
-    } else if (state == AppLifecycleState.resumed) {
-      _startController(_cameraIndex);
+    final action = cameraLifecycleAction(
+      state: state,
+      hasLiveController: _controller?.value.isInitialized ?? false,
+      camerasLoaded: _cameras.isNotEmpty,
+    );
+    switch (action) {
+      case CameraLifecycleAction.release:
+        final controller = _controller;
+        _controller = null;
+        controller?.dispose();
+        if (mounted) setState(() {});
+      case CameraLifecycleAction.restart:
+        _startController(_cameraIndex);
+      case CameraLifecycleAction.none:
+        break;
     }
   }
 
@@ -628,7 +636,11 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       rect: subject.rect,
       imageSize: subject.imageSize,
       viewAspect: _aspect.ratio,
-      mirrorX: camera.lensDirection == CameraLensDirection.front,
+      // Buffer stream trên iOS đã được plugin mirror sẵn — khác ảnh chụp.
+      mirrorX: streamMirrorX(
+        isIOS: Platform.isIOS,
+        isFrontCamera: camera.lensDirection == CameraLensDirection.front,
+      ),
     );
   }
 
@@ -646,7 +658,10 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       ),
       imageSize: detector.lastImageSize,
       viewAspect: _aspect.ratio,
-      mirrorX: camera.lensDirection == CameraLensDirection.front,
+      mirrorX: streamMirrorX(
+        isIOS: Platform.isIOS,
+        isFrontCamera: camera.lensDirection == CameraLensDirection.front,
+      ),
     );
     final locked = detector.lockAt(imagePoint);
     HapticFeedback.selectionClick();

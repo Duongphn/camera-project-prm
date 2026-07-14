@@ -40,6 +40,34 @@ const _deviceOrientationDegrees = {
   DeviceOrientation.landscapeRight: 270,
 };
 
+/// Góc xoay (độ) khai báo với ML Kit cho frame stream.
+///
+/// iOS: camera_avfoundation set `videoOrientation` trên video connection nên
+/// buffer tới Dart đã xoay thẳng theo chiều cầm máy → luôn 0. Khai 90 ở đây
+/// khiến toạ độ bị hoán vị rộng/cao và điểm gợi ý văng ra ngoài khung.
+/// Android: buffer giữ nguyên chiều cảm biến → bù theo hướng thiết bị.
+int? streamRotationDegrees({
+  required bool isIOS,
+  required int sensorOrientation,
+  required bool isFrontCamera,
+  required DeviceOrientation deviceOrientation,
+}) {
+  if (isIOS) return 0;
+  final compensation = _deviceOrientationDegrees[deviceOrientation];
+  if (compensation == null) return null;
+  return isFrontCamera
+      ? (sensorOrientation + compensation) % 360
+      : (sensorOrientation - compensation + 360) % 360;
+}
+
+/// Có soi gương trục X khi map toạ độ stream ↔ viewfinder không.
+///
+/// iOS: plugin đã mirror sẵn buffer camera trước (khớp preview) → false,
+/// mirror thêm lần nữa sẽ lật ngược toạ độ. Android: buffer chưa mirror,
+/// preview thì có → true với camera trước.
+bool streamMirrorX({required bool isIOS, required bool isFrontCamera}) =>
+    isFrontCamera && !isIOS;
+
 /// Nhận diện chủ thể nổi bật trên stream camera bằng ML Kit object detection
 /// (stream mode, model bundled on-device, có tracking ID).
 class SubjectDetector {
@@ -193,15 +221,13 @@ class SubjectDetector {
     CameraDescription camera,
     DeviceOrientation deviceOrientation,
   ) {
-    final sensorOrientation = camera.sensorOrientation;
-    if (Platform.isIOS) {
-      return InputImageRotationValue.fromRawValue(sensorOrientation);
-    }
-    final compensation = _deviceOrientationDegrees[deviceOrientation];
-    if (compensation == null) return null;
-    final degrees = camera.lensDirection == CameraLensDirection.front
-        ? (sensorOrientation + compensation) % 360
-        : (sensorOrientation - compensation + 360) % 360;
+    final degrees = streamRotationDegrees(
+      isIOS: Platform.isIOS,
+      sensorOrientation: camera.sensorOrientation,
+      isFrontCamera: camera.lensDirection == CameraLensDirection.front,
+      deviceOrientation: deviceOrientation,
+    );
+    if (degrees == null) return null;
     return InputImageRotationValue.fromRawValue(degrees);
   }
 }
