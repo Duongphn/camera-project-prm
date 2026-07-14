@@ -628,7 +628,11 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       rect: subject.rect,
       imageSize: subject.imageSize,
       viewAspect: _aspect.ratio,
-      mirrorX: camera.lensDirection == CameraLensDirection.front,
+      // Buffer stream trên iOS đã được plugin mirror sẵn — khác ảnh chụp.
+      mirrorX: streamMirrorX(
+        isIOS: Platform.isIOS,
+        isFrontCamera: camera.lensDirection == CameraLensDirection.front,
+      ),
     );
   }
 
@@ -646,7 +650,10 @@ class _CameraScreenState extends ConsumerState<CameraScreen>
       ),
       imageSize: detector.lastImageSize,
       viewAspect: _aspect.ratio,
-      mirrorX: camera.lensDirection == CameraLensDirection.front,
+      mirrorX: streamMirrorX(
+        isIOS: Platform.isIOS,
+        isFrontCamera: camera.lensDirection == CameraLensDirection.front,
+      ),
     );
     final locked = detector.lockAt(imagePoint);
     HapticFeedback.selectionClick();
